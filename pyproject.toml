@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stockscout"
+version = "0.1.0"
+description = "한국·미국 우량주 낙폭 스크리너"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.5",
+    "PyYAML>=6.0",
+    "python-dotenv>=1.0",
+    "httpx>=0.27",
+    "pandas>=2.1",
+    "pykrx>=1.0.45",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-mock>=3.12"]
+
+[project.scripts]
+stockscout = "stockscout.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
