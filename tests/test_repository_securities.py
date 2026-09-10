@@ -69,3 +69,69 @@ def test_mark_out_of_universe(repo):
 
     assert repo.list_securities(market="KR") == []
     assert repo.get_security("005930.KS").in_universe is False
+
+
+# --- 필드 왕복 -------------------------------------------------------
+#
+# 아래 테스트가 없으면 _to_security가 컬럼을 뒤바꿔 매핑해도 아무도 모른다.
+# 코드 리뷰에서 exchange↔sector를 서로 바꿔치기했는데 13개 테스트가
+# 전부 통과했다.
+
+
+def test_every_field_round_trips(repo):
+    original = Security(
+        ticker="005930.KS",
+        market="KR",
+        name="삼성전자",
+        name_en="Samsung Electronics",
+        exchange="KOSPI",
+        sector="반도체",
+        is_financial=False,
+        source_id="00126380",
+        currency="KRW",
+        listed_at="1975-06-11",
+        in_universe=True,
+    )
+
+    repo.upsert_security(original)
+
+    assert repo.get_security("005930.KS") == original
+
+
+def test_every_field_round_trips_through_list(repo):
+    original = Security(
+        ticker="AAPL",
+        market="US",
+        name="Apple Inc.",
+        name_en="Apple Inc.",
+        exchange="NASDAQ",
+        sector="Technology",
+        is_financial=False,
+        source_id="0000320193",
+        currency="USD",
+        listed_at="1980-12-12",
+        in_universe=True,
+    )
+
+    repo.upsert_security(original)
+
+    assert repo.list_securities(market="US") == [original]
+
+
+def test_financial_sector_flag_round_trips(repo):
+    """금융업은 하드필터에서 통째로 제외되므로 이 플래그가 뒤집히면 결과가 달라진다."""
+    repo.upsert_security(make_security("105560.KS", name="KB금융", is_financial=True))
+
+    assert repo.get_security("105560.KS").is_financial is True
+
+
+def test_mark_out_of_universe_handles_multiple_and_empty(repo):
+    repo.upsert_security(make_security("005930.KS"))
+    repo.upsert_security(make_security("000660.KS", name="SK하이닉스"))
+
+    repo.mark_out_of_universe([])
+    assert len(repo.list_securities(market="KR")) == 2
+
+    repo.mark_out_of_universe(["005930.KS", "000660.KS"])
+    assert repo.list_securities(market="KR") == []
+    assert len(repo.list_securities(market="KR", in_universe_only=False)) == 2
