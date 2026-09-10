@@ -1453,8 +1453,21 @@ T = TypeVar("T")
 # 파이썬 내장 ConnectionError/TimeoutError를 상속하지 않으므로,
 # 내장 예외만 나열하면 실제 네트워크 장애에서 재시도가 전혀 동작하지 않는다.
 #
-# httpx.HTTPStatusError(404·401 등)는 일부러 뺐다. 재시도해도 소용없다 (설계서 §5.3).
-TRANSIENT = (TimeoutError, ConnectionError, OSError, httpx.TransportError)
+# 반대로 bare OSError는 절대 넣지 않는다. PermissionError·FileNotFoundError 같은
+# "영구" 오류가 전부 OSError의 하위클래스라서, OSError를 통째로 넣으면
+# 인증 오류까지 재시도하게 된다. TimeoutError·ConnectionError는 의미가 분명한
+# 개별 하위클래스이므로 명시적으로 나열한다.
+#
+# httpx.HTTPStatusError(404·401 등)도 일부러 뺐다. 재시도해도 소용없다 (설계서 §5.3).
+#
+# 주의 — requests 기반 소스에는 이 튜플이 듣지 않는다.
+# requests.exceptions.ConnectionError는 OSError의 하위클래스지만 내장
+# ConnectionError도 httpx.TransportError도 아니다. pykrx·yfinance가 내부적으로
+# requests를 쓰므로, 그쪽에 @retry_on_transient를 붙이려면 이 튜플에
+# requests.exceptions.(ConnectionError, Timeout)을 명시적으로 더하고
+# 회귀 테스트를 추가해야 한다. 지금은 어느 requests 기반 호출에도
+# 재시도를 걸지 않으므로 의도적으로 비워둔다.
+TRANSIENT = (TimeoutError, ConnectionError, httpx.TransportError)
 
 
 class DailyQuotaExceeded(Exception):

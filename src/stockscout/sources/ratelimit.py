@@ -23,6 +23,14 @@ T = TypeVar("T")
 # 의미가 분명한 개별 하위클래스라서 명시적으로 나열한다.
 #
 # httpx.HTTPStatusError(404·401 등)도 일부러 뺐다. 재시도해도 소용없다 (설계서 §5.3).
+#
+# 주의 — requests 기반 소스에는 이 튜플이 듣지 않는다.
+# requests.exceptions.ConnectionError는 OSError의 하위클래스지만 내장
+# ConnectionError도 httpx.TransportError도 아니다. pykrx·yfinance가 내부적으로
+# requests를 쓰므로, 그쪽에 @retry_on_transient를 붙이려면 이 튜플에
+# requests.exceptions.(ConnectionError, Timeout)을 명시적으로 더하고
+# 회귀 테스트를 추가해야 한다. 지금은 어느 requests 기반 호출에도
+# 재시도를 걸지 않으므로 의도적으로 비워둔다.
 TRANSIENT = (TimeoutError, ConnectionError, httpx.TransportError)
 
 
