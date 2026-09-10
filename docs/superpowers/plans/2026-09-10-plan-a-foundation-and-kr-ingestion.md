@@ -64,6 +64,47 @@ sources normalize store      ← 서로를 import하지 않는다
 
 ---
 
+## 실행 중 발견된 변경 (2026-09-10)
+
+### KRX 지수 API가 로그인 필수로 바뀌었다
+
+Task 9의 탐색 단계에서 확인했다. KRX가 `data.krx.co.kr`를 로그인 기반 "데이터 마켓플레이스"로 전환하면서 pykrx의 시장·지수 단위 엔드포인트가 전부 막혔다. 실측 결과:
+
+| pykrx 기능 | 익명 접근 |
+|---|---|
+| `get_market_ohlcv` (종목별 일봉) | ✅ 동작 |
+| `get_market_ticker_name` (종목명) | ✅ 동작 |
+| `get_index_portfolio_deposit_file` (지수 구성종목) | ❌ HTTP 400 `LOGOUT` |
+| `get_market_ticker_list` (시장 전체) | ❌ 빈 결과 |
+| `get_market_cap_by_ticker` (시가총액 일괄) | ❌ 예외 |
+
+대안으로 FinanceDataReader도 시험했으나 백엔드가 HTTP 404로 응답한다.
+
+**주가 수집은 영향이 없고, 유니버스 구성만 막힌다.** `KrxUniverse`(Task 9)는 코드를 그대로 두되, `KRX_ID`·`KRX_PW`가 있을 때 쓰는 경로가 된다.
+
+한 가지 확인된 좋은 소식: `get_market_ohlcv`는 **기본값이 수정주가**다. 삼성전자 2018-05-04 50:1 액면분할 구간을 뽑아 가격 연속성을 확인했고, `adjusted=True`를 명시한 결과와 동일했다. 5년 평균 대비 하락률이 이 제품의 핵심 신호이므로 이것이 아니었으면 계산 전체가 무의미했다.
+
+### Task 9b — 파일 기반 유니버스 (추가)
+
+설계서 §4.1이 이미 `config/universe.yaml`(지수 구성종목 정의)을 명시하고 있으므로, 유니버스를 파일로 옮기는 것은 원래 설계와 어긋나지 않는다.
+
+**Files:**
+- Create: `config/universe.yaml` — KOSPI 대표 42종목. 코드는 pykrx 종목명 조회로 42개 전부 실측 검증했다
+- Create: `src/stockscout/sources/universe.py` — `YamlUniverse`. `fetch() -> list[Security]`로 `KrxUniverse`와 교체 가능
+- Test: `tests/test_universe_yaml.py`
+
+`YamlUniverse`가 `KrxUniverse`와 다른 점 하나: **종목명 조회에 실패해도 그 종목을 버리지 않고** 코드를 이름 삼아 포함한다. 손으로 고른 목록이므로 조회 실패는 잘못된 티커가 아니라 일시적 네트워크 문제로 보는 것이 맞다.
+
+**YAML에서 종목코드는 반드시 따옴표로 묶는다.** `005930`을 그냥 쓰면 정수 `5930`이 되어 앞자리 0이 사라진다. 실제 파일을 로드해 6자리 문자열인지 확인하는 회귀 테스트를 둔다.
+
+Task 15의 CLI는 `KRX_ID`·`KRX_PW` 유무로 두 provider 중 하나를 고른다.
+
+### Task 8·12·16은 DART API 키를 기다린다
+
+Task 7은 오프라인 범위(파서 + 클라이언트 골격)만 수행했다. 실제 API를 호출하는 Step 1·7은 키가 생긴 뒤 실행한다. Task 8과 12는 삼성전자 실제 응답을 픽스처로 저장한 뒤 그에 맞춰 계정과목을 매핑하는 구조라, 키 없이는 추측이 된다.
+
+---
+
 ## Task 1: 프로젝트 뼈대
 
 **Files:**
