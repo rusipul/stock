@@ -2383,6 +2383,12 @@ def make(**overrides) -> Financials:
     base = dict(
         ticker="005930.KS", fiscal_year=2025, currency="KRW",
         revenue=300.0, operating_income=30.0, total_equity=200.0, total_liabilities=60.0,
+        # 선택 필드도 기본값을 채운다. 비워두면 missing_fields가 손대지 않은
+        # 선택 필드까지 전부 잡아내서, 특정 필드의 결측만 확인하려는 테스트가
+        # 격리되지 않는다.
+        net_income=10.0, total_assets=100.0, current_assets=50.0,
+        current_liabilities=20.0, interest_expense=1.0, operating_cash_flow=15.0,
+        capex=5.0, shares_outstanding=1000.0, dividend_per_share=1.0,
     )
     base.update(overrides)
     return Financials(**base)
