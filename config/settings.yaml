@@ -1,0 +1,48 @@
+universe:
+  markets: [KR]              # 계획 D에서 US 추가
+  kr_index: KOSPI200
+  us_index: SP500
+  exclude_financials: true
+
+lookback:
+  price_years: [1, 3, 5]
+  primary_window: 5
+  financial_years: 5
+  min_data_coverage: 0.8
+
+hard_filters:
+  max_debt_ratio: 200
+  consecutive_operating_loss_years: 3
+  min_interest_coverage: 1.0
+  interest_coverage_years: 2
+  max_revenue_decline_3y: -0.5
+  min_history_years: 5
+
+scoring:
+  profitability:
+    roe_avg3:        {points: 10, bands: [[0.15, 10], [0.10, 7], [0.05, 4], [0.0, 1]]}
+    op_margin_avg3:  {points: 10, bands: [[0.15, 10], [0.10, 7], [0.05, 4], [0.0, 1]]}
+    op_margin_trend: {points: 5}
+  growth:
+    revenue_cagr3:      {points: 10, bands: [[0.15, 10], [0.10, 8], [0.05, 5], [0.0, 2]]}
+    op_income_cagr3:    {points: 10, bands: [[0.15, 10], [0.10, 8], [0.05, 5], [0.0, 2]]}
+    growth_consistency: {points: 5}
+  stability:
+    debt_ratio:        {points: 10, bands: [[50, 10], [100, 7], [150, 4], [200, 1]], lower_is_better: true}
+    current_ratio:     {points: 5,  bands: [[2.0, 5], [1.5, 3.5], [1.0, 2]]}
+    interest_coverage: {points: 10, bands: [[10, 10], [5, 7], [3, 4], [1, 2]]}
+  cashflow:
+    ocf_positive_years: {points: 10, bands: [[5, 10], [4, 8], [3, 5], [2, 3]]}
+    ocf_to_op_income:   {points: 10, bands: [[1.2, 10], [1.0, 8], [0.8, 5], [0.5, 2]]}
+    fcf_positive_years: {points: 5,  bands: [[3, 5], [2, 3], [1, 1]]}
+
+signal:
+  min_score: 70
+  drop_vs_avg_threshold: -0.40
+  drop_vs_high_threshold: -0.40
+
+sources:
+  kr_fundamental: dart
+  kr_price: pykrx
+  us_fundamental: edgar
+  us_price: yfinance
