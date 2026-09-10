@@ -6,7 +6,7 @@ import json
 import sqlite3
 from datetime import date, datetime, timezone
 
-from stockscout.models import PriceBar, RawStatement, Security
+from stockscout.models import Financials, PriceBar, RawStatement, Security
 
 
 def _now() -> str:
@@ -160,6 +160,51 @@ class Repository:
             "SELECT MAX(date) AS d FROM raw_prices WHERE ticker = ?", (ticker,)
         ).fetchone()
         return date.fromisoformat(row["d"]) if row and row["d"] else None
+
+    # --- 정규화 재무 -------------------------------------------------
+
+    _FIN_COLUMNS = (
+        "ticker", "fiscal_year", "currency", "revenue", "operating_income",
+        "net_income", "total_assets", "total_liabilities", "total_equity",
+        "current_assets", "current_liabilities", "interest_expense",
+        "operating_cash_flow", "capex", "shares_outstanding", "dividend_per_share",
+    )
+
+    def save_financials(self, records: list[Financials]) -> None:
+        cols = ", ".join(self._FIN_COLUMNS) + ", missing_fields"
+        placeholders = ", ".join("?" * (len(self._FIN_COLUMNS) + 1))
+        updates = ", ".join(
+            f"{c}=excluded.{c}" for c in self._FIN_COLUMNS[2:]
+        ) + ", missing_fields=excluded.missing_fields"
+        self.conn.executemany(
+            f"""
+            INSERT INTO financials ({cols}) VALUES ({placeholders})
+            ON CONFLICT(ticker, fiscal_year) DO UPDATE SET {updates}
+            """,
+            [
+                tuple(getattr(r, c) for c in self._FIN_COLUMNS)
+                + (json.dumps(r.missing_fields, ensure_ascii=False),)
+                for r in records
+            ],
+        )
+        self.conn.commit()
+
+    def get_financials(self, ticker: str) -> list[Financials]:
+        rows = self.conn.execute(
+            "SELECT * FROM financials WHERE ticker = ? ORDER BY fiscal_year",
+            (ticker,),
+        ).fetchall()
+        return [
+            Financials(**{c: row[c] for c in self._FIN_COLUMNS}) for row in rows
+        ]
+
+    def missing_field_counts(self) -> dict[str, int]:
+        """정규화 품질 보고용. 어떤 계정과목 매핑이 자주 실패하는지 보여준다."""
+        counts: dict[str, int] = {}
+        for row in self.conn.execute("SELECT missing_fields FROM financials"):
+            for field in json.loads(row["missing_fields"] or "[]"):
+                counts[field] = counts.get(field, 0) + 1
+        return counts
 
     # --- 오류 기록 ---------------------------------------------------
 
