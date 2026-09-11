@@ -21,9 +21,10 @@ def repo(tmp_path):
         yield Repository(conn)
 
 
-def snap(note="테스트"):
+def snap(note="테스트", as_of=None):
     return Snapshot(run_at="2026-09-11T02:00:00+00:00", config_hash="h1",
-                    config_json='{"signal": {"min_score": 70}}', note=note)
+                    config_json='{"signal": {"min_score": 70}}', note=note,
+                    as_of=as_of)
 
 
 def result(ticker="005930.KS", failures=None, drop5=-0.42):
@@ -139,6 +140,27 @@ def test_get_latest_snapshot_is_none_when_empty(repo):
     assert repo.get_latest_snapshot() is None
 
 
+def test_snapshot_as_of_round_trips(repo):
+    """스냅샷은 어떤 가격 기준일이 그 숫자들을 만들었는지 스스로 밝혀야 한다.
+
+    run_at(실행 시각)만으로는 재현할 수 없다 — 수집을 일주일 건너뛰면
+    run_at은 흘러가도 as_of(가장 최근 주가일)는 그대로일 수 있다.
+    """
+    sid = repo.save_snapshot(snap(as_of="2026-09-10"), [result()])
+
+    stored = repo.get_latest_snapshot()
+
+    assert stored.snapshot_id == sid
+    assert stored.as_of == "2026-09-10"
+
+
+def test_snapshot_as_of_defaults_to_none(repo):
+    """as_of를 넘기지 않은 기존 호출 패턴도 계속 동작해야 한다."""
+    repo.save_snapshot(snap(), [result()])
+
+    assert repo.get_latest_snapshot().as_of is None
+
+
 # --- 원자성 (설계서 §13) ----------------------------------------------
 
 
@@ -170,7 +192,17 @@ def test_previous_snapshot_survives_a_failed_run(repo):
 
 
 def test_empty_results_still_creates_a_snapshot(repo):
-    """분석 대상이 0종목이어도 실행 기록은 남는다."""
+    """분석 대상이 0종목이어도 실행 기록은 남는다.
+
+    이것은 저장 계층 하나만의 계약이다: save_snapshot()은 빈 결과도
+    "언제 뭘 돌렸는지" 기록할 가치가 있다고 본다. 이 스냅샷이
+    get_latest_snapshot()에서 최신으로 뽑혀 직전의 진짜 결과를 가려도
+    되는지는 별개 질문이고, 그 답은 "아니오"다 — 그 판단은 파이프라인의
+    몫이다. tests/test_pipeline_analyze.py::
+    test_analyze_does_not_save_snapshot_when_no_results가 그쪽을 고정한다:
+    analyze_market은 결과가 없으면 애초에 save_snapshot을 부르지 않는다.
+    두 테스트는 서로 다른 계층을 보므로 모순이 아니다.
+    """
     sid = repo.save_snapshot(snap(), [])
 
     assert repo.get_latest_snapshot().snapshot_id == sid
@@ -279,6 +311,33 @@ def test_latest_price_date_any_is_the_true_max_across_tickers(repo):
     )
 
     assert repo.latest_price_date_any() == date(2026, 2, 9)
+
+
+def test_latest_price_date_any_is_scoped_to_market_when_given(repo):
+    """미국 장은 한국 장보다 늦게 마감한다. market을 넘기면 그 시장의
+    종목에 달린 봉만 봐야 한다 — 그러지 않으면 KR 분석의 as_of가 아직
+    KR에는 봉이 없는 날짜로 밀려버린다 (실측: US 종목 봉 하나가
+    KR 전 종목의 as_of를 2026-09-11로 밀었다).
+    """
+    from datetime import date
+
+    from stockscout.models import PriceBar, Security
+
+    repo.upsert_security(Security(ticker="005930.KS", market="KR",
+                                  name="삼성전자", currency="KRW"))
+    repo.upsert_security(Security(ticker="AAPL", market="US",
+                                  name="Apple", currency="USD"))
+    repo.save_price_bars(
+        [
+            PriceBar(ticker="005930.KS", date=date(2026, 9, 10), close=1.0),
+            PriceBar(ticker="AAPL", date=date(2026, 9, 11), close=1.0),
+        ],
+        source="test",
+    )
+
+    assert repo.latest_price_date_any(market="KR") == date(2026, 9, 10)
+    assert repo.latest_price_date_any(market="US") == date(2026, 9, 11)
+    assert repo.latest_price_date_any() == date(2026, 9, 11)  # 시장 미지정 시 기존 동작 유지
 
 
 # --- first_price_date -----------------------------------------------------

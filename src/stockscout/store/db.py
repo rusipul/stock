@@ -29,4 +29,21 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH) -> Iterator[sqlite3.Connectio
 def init_db(conn: sqlite3.Connection) -> None:
     """스키마를 적용한다. 여러 번 호출해도 안전하다(CREATE TABLE IF NOT EXISTS)."""
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    _add_snapshots_as_of_column_if_missing(conn)
     conn.commit()
+
+
+def _add_snapshots_as_of_column_if_missing(conn: sqlite3.Connection) -> None:
+    """v1 이전에 추가된 컬럼을 기존 DB에 얹는다.
+
+    CREATE TABLE IF NOT EXISTS는 이미 존재하는 테이블에 새 컬럼을 얹어
+    주지 않는다. data/stockscout.db처럼 몇 분 걸려 받은 실제 운영 DB를
+    다시 만들지 않고도 스키마를 따라잡아야 한다. 이 프로젝트는 별도
+    마이그레이션 프레임워크를 두지 않는다 — 테이블 몇 개짜리 SQLite에는
+    과하다. 대신 "컬럼이 있는지 보고 없으면 ALTER TABLE"이라는 이 짧은
+    패턴으로 pre-v1 스키마 추가를 하나씩 처리한다. 필요해지면 함수를
+    하나 더 늘리는 정도로 충분하다.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)")}
+    if "as_of" not in columns:
+        conn.execute("ALTER TABLE snapshots ADD COLUMN as_of TEXT")

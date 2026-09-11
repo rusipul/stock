@@ -28,6 +28,7 @@ SUPPORTED_MARKETS = ("KR", "US")
 
 class AnalyzeSummary(BaseModel):
     snapshot_id: int | None = None
+    as_of: date | None = None   # 이 실행이 고정한 가격 기준일
     analyzed: int = 0
     passed: int = 0
     excluded: int = 0
@@ -38,12 +39,20 @@ class AnalyzeSummary(BaseModel):
         lines = [
             f"{self.analyzed}종목 분석 · 통과 {self.passed} · 제외 {self.excluded}",
         ]
+        if self.as_of is not None:
+            lines.append(f"기준일 {self.as_of}")
         if self.skipped:
             lines.append(f"주가 없어 건너뜀 {self.skipped}종목")
         if self.failed:
             lines.append(f"계산 실패 {self.failed}종목 (원인은 collect_errors 참고)")
         if self.snapshot_id is not None:
             lines.append(f"스냅샷 #{self.snapshot_id} 저장")
+        else:
+            # 결과가 0건이면 스냅샷을 남기지 않는다 (analyze_market 참고) —
+            # 그러지 않으면 직전의 진짜 스냅샷이 이 빈 실행에 가려진다.
+            # 운영자가 exit code 0만 보고 "잘 됐나 보다"로 넘기면 안 되므로
+            # 그 이유를 여기서 밝힌다.
+            lines.append("스냅샷 저장 안 함 (분석 결과 없음 · 직전 스냅샷 유지)")
         return "\n".join(lines)
 
 
@@ -70,7 +79,12 @@ def analyze_market(
 
     summary = AnalyzeSummary()
     windows = config.lookback.price_years
-    as_of = repo.latest_price_date_any() or date.today()
+    # market으로 한정한다: 시장마다 마감 시각이 달라(예: 미국 장은 한국보다
+    # 늦게 마감) 시장을 구분하지 않으면 다른 시장의 최신 봉 날짜가 이
+    # 시장의 as_of를 밀어버려, 아직 그 시장에 존재하지 않는 날짜를
+    # 기준으로 전 종목을 평가하게 된다.
+    as_of = repo.latest_price_date_any(market=market) or date.today()
+    summary.as_of = as_of
     calendar = repo.trading_dates(
         _earliest_window_start(as_of, windows), as_of
     )
@@ -117,14 +131,25 @@ def analyze_market(
         else:
             summary.excluded += 1
 
-    snapshot = Snapshot(
-        run_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        config_hash=config_hash(config),
-        config_json=json.dumps(config.model_dump(mode="json"),
-                               sort_keys=True, ensure_ascii=False),
-        note=note,
-    )
-    summary.snapshot_id = repo.save_snapshot(snapshot, results)
+    # 결과가 없으면 스냅샷을 남기지 않는다. Repository.save_snapshot 자체는
+    # 빈 결과도 기록하는 합리적인 저장 계층 계약이지만(그 계약은
+    # test_repository_snapshots.py::test_empty_results_still_creates_a_snapshot로
+    # 고정돼 있다), 그 빈 스냅샷이 get_latest_snapshot()의 최신으로 뽑히면
+    # 직전의 진짜(0건이 아닌) 스냅샷을 가려버린다. 설계서 §13이 예외에
+    # 대해서만 약속한 "직전 스냅샷이 유지되므로 화면은 계속 동작한다"가
+    # 성공했지만 텅 빈 실행(오타난 --market, 빈 DB, 가격 없는 DB 등)에는
+    # 예외가 없다는 이유만으로 조용히 깨지지 않게 한다. exit code는
+    # 그대로 0이다 — 빈 분석은 장애가 아니라 "볼 게 없다"는 사실이다.
+    if results:
+        snapshot = Snapshot(
+            run_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            as_of=as_of.isoformat(),
+            config_hash=config_hash(config),
+            config_json=json.dumps(config.model_dump(mode="json"),
+                                   sort_keys=True, ensure_ascii=False),
+            note=note,
+        )
+        summary.snapshot_id = repo.save_snapshot(snapshot, results)
     return summary
 
 

@@ -260,10 +260,10 @@ class Repository:
         """
         try:
             cur = self.conn.execute(
-                "INSERT INTO snapshots (run_at, config_hash, config_json, note) "
-                "VALUES (?, ?, ?, ?)",
-                (snapshot.run_at, snapshot.config_hash, snapshot.config_json,
-                 snapshot.note),
+                "INSERT INTO snapshots (run_at, as_of, config_hash, config_json, note) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (snapshot.run_at, snapshot.as_of, snapshot.config_hash,
+                 snapshot.config_json, snapshot.note),
             )
             snapshot_id = cur.lastrowid
 
@@ -312,6 +312,7 @@ class Repository:
             return None
         return Snapshot(
             snapshot_id=row["snapshot_id"], run_at=row["run_at"],
+            as_of=row["as_of"],
             config_hash=row["config_hash"], config_json=row["config_json"],
             note=row["note"],
         )
@@ -342,9 +343,33 @@ class Repository:
         ).fetchall()
         return [date.fromisoformat(r["date"]) for r in rows]
 
-    def latest_price_date_any(self) -> date | None:
-        """전 종목 통틀어 가장 최근 거래일. 분석 기준일이 된다."""
-        row = self.conn.execute("SELECT MAX(date) AS d FROM raw_prices").fetchone()
+    def latest_price_date_any(self, market: str | None = None) -> date | None:
+        """가장 최근 거래일. 분석 기준일(as_of)이 된다.
+
+        market을 넘기면 그 시장의 종목에 달린 봉만 본다. 시장마다 거래
+        캘린더가 다르다 — 미국 장은 한국 장보다 늦게 마감하므로, market을
+        구분하지 않으면 US 종목의 최신 봉 날짜가 KR 분석의 as_of를 밀어
+        버려 KR 종목 전부가 아직 그 시장에 존재하지 않는 날짜를 기준으로
+        평가된다(실측: US 종목 봉 하나로 재현됨). analyze_market은 항상
+        분석 중인 시장을 넘긴다.
+
+        market을 생략하면(None) 시장 구분 없이 전체 최댓값을 낸다 — 이
+        무필터 동작은 유지한다. list_securities와 달리 raw_prices는
+        securities 없이도 채워질 수 있으므로(가격만 먼저 수집하는 흐름),
+        시장을 강제하면 그 데이터를 볼 방법이 없어진다.
+        """
+        if market:
+            row = self.conn.execute(
+                """
+                SELECT MAX(rp.date) AS d
+                FROM raw_prices rp
+                JOIN securities s ON s.ticker = rp.ticker
+                WHERE s.market = ?
+                """,
+                (market,),
+            ).fetchone()
+        else:
+            row = self.conn.execute("SELECT MAX(date) AS d FROM raw_prices").fetchone()
         return date.fromisoformat(row["d"]) if row and row["d"] else None
 
     # --- 오류 기록 ---------------------------------------------------

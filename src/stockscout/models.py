@@ -193,6 +193,11 @@ class Snapshot(BaseModel):
 
     snapshot_id: int | None = None   # 저장 시 부여된다
     run_at: str
+    as_of: str | None = None         # 이 스냅샷이 고정한 가격 기준일(ISO 날짜).
+                                      # run_at과 달리 실행 시각이 아니라 그
+                                      # 실행이 "무엇을 기준으로" 계산했는지를
+                                      # 말한다. 기존 스냅샷·직접 조립한
+                                      # Snapshot과의 호환을 위해 선택값이다.
     config_hash: str
     config_json: str
     note: str | None = None

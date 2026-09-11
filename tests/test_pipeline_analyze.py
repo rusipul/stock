@@ -409,3 +409,103 @@ def test_high_5y_survives_narrowing_price_years(repo):
     assert row["high_5y"] == 500.0          # 3년 창 밖의 고점을 놓치지 않는다
     assert row["avg_price_5y"] is None      # 5년 평균은 요청되지 않았다
     assert row["avg_price_3y"] is not None
+
+
+# --- 결함 1: 빈 결과가 직전의 진짜 스냅샷을 가리면 안 된다 ----------------
+#
+# Repository.save_snapshot 자체는 빈 결과도 기록하는 게 합리적인 저장
+# 계층 계약이다 — "언제 뭘 돌렸는지"는 결과가 0건이어도 남길 가치가
+# 있다 (tests/test_repository_snapshots.py::
+# test_empty_results_still_creates_a_snapshot 참고). 하지만 그 스냅샷이
+# get_latest_snapshot()에서 최신으로 뽑히면 직전의 진짜(0건이 아닌)
+# 스냅샷을 가려버린다 — 설계서 §13이 약속한 "직전 스냅샷이 유지되므로
+# 화면은 계속 동작한다"가 예외가 아닌 "성공했지만 텅 빈" 실행에 의해
+# 조용히 깨진다. 그 판단은 저장 계층이 아니라 파이프라인의 몫이다:
+# 결과가 없으면 애초에 save_snapshot을 부르지 않는다.
+
+
+def test_analyze_does_not_save_snapshot_when_no_results(repo):
+    """KR 전용 DB에 --market US로 돌리면(오타 재현) 스냅샷을 남기지 않는다."""
+    seed(repo, "005930.KS", market="KR")
+
+    summary = analyze_market(repo, market="US", config=cfg())
+
+    assert summary.analyzed == 0
+    assert summary.snapshot_id is None
+    assert repo.get_latest_snapshot() is None
+
+
+def test_analyze_empty_run_does_not_shadow_previous_snapshot(repo):
+    """빈 실행 뒤에도 직전의 진짜 스냅샷이 최신으로 남아야 한다."""
+    seed(repo, "005930.KS", market="KR")
+    good = analyze_market(repo, market="KR", config=cfg())
+
+    empty = analyze_market(repo, market="US", config=cfg())  # 이 DB엔 US 종목이 없다
+
+    assert empty.snapshot_id is None
+    latest = repo.get_latest_snapshot()
+    assert latest is not None
+    assert latest.snapshot_id == good.snapshot_id
+
+
+def test_analyze_empty_db_saves_no_snapshot(repo):
+    """빈 DB(종목도 없음)에서 실행해도 스냅샷을 남기지 않는다."""
+    summary = analyze_market(repo, market="KR", config=cfg())
+
+    assert summary.snapshot_id is None
+    assert repo.get_latest_snapshot() is None
+
+
+def test_render_explains_why_nothing_was_saved(repo):
+    """운영자가 화면만 보고도 "왜 0종목이 됐고 무엇이 저장됐는지" 알아야 한다."""
+    summary = analyze_market(repo, market="US", config=cfg())  # 이 repo는 비어 있다
+
+    text = summary.render()
+
+    assert "저장" in text
+    assert "#" not in text   # "#None" 같은 오해의 소지가 있는 표기가 없어야 한다
+
+
+# --- 결함 2: 스냅샷이 자신을 재현할 수 있어야 한다 -------------------------
+#
+# snapshots는 run_at(실행 시각)만 남기고 as_of(분석이 고정된 가격
+# 기준일)는 남기지 않았다. 같은 config_hash라도 수집을 며칠 건너뛰면
+# run_at은 흘러가지만 as_of는 그대로거나 그 반대일 수 있어, run_at으로
+# as_of를 추정할 수 없다.
+
+
+def test_analyze_persists_as_of_on_snapshot(repo):
+    seed(repo, "005930.KS", last=date(2026, 9, 10))
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+
+    stored = repo.get_latest_snapshot()
+    assert stored.as_of == "2026-09-10"
+    assert summary.as_of == date(2026, 9, 10)
+
+
+def test_summary_render_shows_as_of(repo):
+    seed(repo, "005930.KS", last=date(2026, 9, 10))
+
+    text = analyze_market(repo, market="KR", config=cfg()).render()
+
+    assert "2026-09-10" in text
+
+
+# --- 결함 4: as_of는 분석 중인 시장으로 한정돼야 한다 ----------------------
+#
+# Repository.latest_price_date_any()가 시장을 몰랐다. 미국 장은 한국
+# 장보다 늦게 마감하므로, US 종목의 최신 봉 날짜가 KR 분석의 as_of를
+# 밀어버리면 모든 KR 종목이 아직 그 시장에 존재하지 않는 날짜를 기준으로
+# 평가된다.
+
+
+def test_analyze_as_of_is_scoped_to_market(repo):
+    seed(repo, "005930.KS", market="KR",
+         first=date(2021, 9, 10), last=date(2026, 9, 10))
+    seed(repo, "AAPL", market="US",
+         first=date(2021, 9, 10), last=date(2026, 9, 11))  # 미국 장은 더 늦게 마감한다
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+
+    assert summary.as_of == date(2026, 9, 10)

@@ -25,7 +25,14 @@ def to_ticker(stock_code: str) -> str:
 def _default_ohlcv_fn(fromdate: str, todate: str, ticker: str) -> pd.DataFrame:
     from pykrx import stock
 
-    return stock.get_market_ohlcv(fromdate, todate, ticker)
+    # adjusted=True는 지금 이 버전(pykrx 1.2.8)의 기본값과 같지만, 그
+    # 기본값에 기대지 않고 명시한다. 설계서 §9.1은 수정주가를 필수로
+    # 요구한다 — 2018년 삼성전자 50:1 액면분할처럼, 수정 없는 종가로
+    # 5년 평균을 구하면 분할 이전 가격이 그대로 섞여 하락률이 통째로
+    # 틀어진다. pyproject.toml이 pykrx를 상한 없이(>=1.0.45) 고정하므로,
+    # 상류가 언젠가 기본값을 뒤집으면 이 스크리너가 존재하는 이유 자체가
+    # 조용히 깨진다. 이 한 줄이 그 실패 모드를 막는다.
+    return stock.get_market_ohlcv(fromdate, todate, ticker, adjusted=True)
 
 
 class KrxPriceSource:
