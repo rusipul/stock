@@ -64,6 +64,128 @@ sources normalize store      ← 서로를 import하지 않는다
 
 ---
 
+## 실행 중 발견된 변경 (2026-09-10)
+
+### KRX 지수 API가 로그인 필수로 바뀌었다
+
+Task 9의 탐색 단계에서 확인했다. KRX가 `data.krx.co.kr`를 로그인 기반 "데이터 마켓플레이스"로 전환하면서 pykrx의 시장·지수 단위 엔드포인트가 전부 막혔다. 실측 결과:
+
+| pykrx 기능 | 익명 접근 |
+|---|---|
+| `get_market_ohlcv` (종목별 일봉) | ✅ 동작 |
+| `get_market_ticker_name` (종목명) | ✅ 동작 |
+| `get_index_portfolio_deposit_file` (지수 구성종목) | ❌ HTTP 400 `LOGOUT` |
+| `get_market_ticker_list` (시장 전체) | ❌ 빈 결과 |
+| `get_market_cap_by_ticker` (시가총액 일괄) | ❌ 예외 |
+
+대안으로 FinanceDataReader도 시험했으나 백엔드가 HTTP 404로 응답한다.
+
+**주가 수집은 영향이 없고, 유니버스 구성만 막힌다.** `KrxUniverse`(Task 9)는 코드를 그대로 두되, `KRX_ID`·`KRX_PW`가 있을 때 쓰는 경로가 된다.
+
+한 가지 확인된 좋은 소식: `get_market_ohlcv`는 **기본값이 수정주가**다. 삼성전자 2018-05-04 50:1 액면분할 구간을 뽑아 가격 연속성을 확인했고, `adjusted=True`를 명시한 결과와 동일했다. 5년 평균 대비 하락률이 이 제품의 핵심 신호이므로 이것이 아니었으면 계산 전체가 무의미했다.
+
+### Task 9b — 파일 기반 유니버스 (추가)
+
+설계서 §4.1이 이미 `config/universe.yaml`(지수 구성종목 정의)을 명시하고 있으므로, 유니버스를 파일로 옮기는 것은 원래 설계와 어긋나지 않는다.
+
+**Files:**
+- Create: `config/universe.yaml` — KOSPI 대표 42종목. 코드는 pykrx 종목명 조회로 42개 전부 실측 검증했다
+- Create: `src/stockscout/sources/universe.py` — `YamlUniverse`. `fetch() -> list[Security]`로 `KrxUniverse`와 교체 가능
+- Test: `tests/test_universe_yaml.py`
+
+`YamlUniverse`가 `KrxUniverse`와 다른 점 하나: **종목명 조회에 실패해도 그 종목을 버리지 않고** 코드를 이름 삼아 포함한다. 손으로 고른 목록이므로 조회 실패는 잘못된 티커가 아니라 일시적 네트워크 문제로 보는 것이 맞다.
+
+**YAML에서 종목코드는 반드시 따옴표로 묶는다.** `005930`을 그냥 쓰면 정수 `5930`이 되어 앞자리 0이 사라진다. 실제 파일을 로드해 6자리 문자열인지 확인하는 회귀 테스트를 둔다.
+
+Task 15의 CLI는 `KRX_ID`·`KRX_PW` 유무로 두 provider 중 하나를 고른다.
+
+### 발행주식수·배당은 다른 엔드포인트에 있다 — 계획 B가 알아야 한다
+
+Task 12의 `ACCOUNT_MAP`이 `Financials`의 13개 필드 중 11개만 채운다. 빠진 둘은 `shares_outstanding`과 `dividend_per_share`이며, 이는 매핑 누락이 아니라 소스의 구조다. DART의 단일회사 전체 재무제표 API(`fnlttSinglAcntAll`)는 재무제표 본문만 준다. 발행주식수는 「주식의 총수 현황」, 배당은 「배당에 관한 사항」이라는 별도 공시 항목이다.
+
+결과적으로 설계서 §9.2의 세 지표가 전부 계산되지 않는다.
+
+```
+market_cap = 현재가 × shares_outstanding   → NULL
+PER        = 현재가 ÷ EPS                  → NULL
+PBR        = 현재가 ÷ BPS                  → NULL
+```
+
+설계서 §9.2가 이미 "`shares_outstanding`이 결측이면 세 값 모두 NULL이며 화면에는 `—`로 표시한다"고 정해두었으므로 시스템이 깨지지는 않는다. 다만 설계서 §11.1의 **시가총액순 정렬**과 §11.2의 **PER KPI 카드**가 항상 비어 있게 된다.
+
+**계획 B 착수 전에 결정해야 한다.** 선택지는 세 가지다.
+
+1. DART 추가 엔드포인트를 수집한다 — 종목당 API 호출이 늘지만 데이터가 정확하다
+2. pykrx의 종목별 조회로 시가총액을 받는다 — 시장 단위 조회는 로그인이 필요하지만 종목별은 익명으로 동작할 가능성이 있다(미확인)
+3. 세 지표를 v1에서 빼고 화면에서도 내린다 — 우량주 점수와 하락률만으로 판정한다. 설계서 §8.2가 이미 밸류에이션을 점수에서 제외했으므로 판정 로직에는 영향이 없다
+
+### 최종 교차 리뷰에서 고친 것 (2026-09-11)
+
+과제별 리뷰가 구조적으로 볼 수 없던 결함 — 단계 사이, 실행과 실행 사이에 있는 것들이다.
+
+**C1. 증분 주가 수집이 조정 기준을 뒤섞었다.** `_collect_prices`가 설계서 §5.3의 "`(ticker, date)` 단위 건너뛰기" 대신 `MAX(date)` 고수위선을 썼다. 결과: ① 액면분할이 일어나면 소스가 과거 주가를 전부 재조정하는데 마지막 날짜부터만 이어받아 두 기준이 한 시계열에 섞인다(저장된 `[100000×5, 20000×5]` → 평균 대비 **-66.7%** 가짜 신호) ② `price_years`를 넓혀도 앞 구간이 영구히 비어 `avg_price_5y`가 3년치로 계산된다.
+
+**해법: 주가는 항상 요청 구간 전체를 다시 받는다.** pykrx는 기간 전체를 **호출 한 번**으로 돌려주므로 증분 수집이 호출 수를 전혀 아끼지 못한다. 아끼는 것 없이 정확성만 잃고 있었다. `save_price_bars`가 upsert라 재수집은 멱등이며, 매번 현재 조정 기준으로 다시 맞춰지므로 분할이 자동 복구된다. 재무는 회계연도마다 호출이 나가므로 증분을 유지한다.
+
+**C2. 재무 실패가 같은 종목의 주가 수집을 막았다.** 두 호출이 한 `try` 안에 있어서, DART가 실패하면 독립 소스인 pykrx까지 건너뛰었다. Task 16 Step 4가 "DART에 없는 종목 10개 정도는 정상"이라고 써둔 바로 그 종목들이 5년치 주가를 통째로 잃고, DART 실패는 영구적이라 재실행으로도 복구되지 않았다. **해법: 하위 단계별로 `try`를 분리**하고 종목은 정확히 한 번만 집계한다.
+
+**I1. 모든 오류가 재무 소스 이름으로 기록됐다.** pykrx 실패가 `collect_errors.source='dart'`로 남았다. `--skip-financials` 경로에서는 `'skipped'`로 남아 더 무의미했다. 실패한 소스 이름을 기록한다.
+
+**I4. `normalize_market`에 종목 단위 격리가 없고 `source`를 무시했다.** 페이로드 하나가 망가지면 전체 실행이 중단되는데, 하필 "무엇이 결측인지" 알려주는 보고서가 루프 뒤에서 계산돼 그 보고서를 못 받는다. 매핑을 고쳐가며 재실행하는 워크플로 자체가 무너진다. 또 `get_raw_statements`에 `source`를 넘기지 않아 계획 D에서 dart/edgar 페이로드가 섞인다.
+
+**I6. `--tickers 005930`이 조용히 아무것도 수집하지 않았다.** DB 티커는 `005930.KS` 형태라 매칭에 실패하는데 종료코드 0으로 끝났다. 증권사 화면에 찍히는 형태가 6자리 코드다.
+
+### 다음 단계로 넘기는 결정사항
+
+고치지 않고 기록만 한다. 각각 판단이 필요하다.
+
+**I2. `Repository`가 매 쓰기마다 commit한다 — 계획 B의 첫 스냅샷 작성 직전에 벽이다.** 설계서 §13은 "배치 중 예외 → 스냅샷을 커밋하지 않는다. 직전 스냅샷이 유지되므로 화면은 계속 동작한다"를 요구하는데, 이는 `snapshots` 1행 + `analysis_results` N행을 한 트랜잭션으로 묶어야 가능하다. 쓰기마다 commit하는 지금 구조로는 표현할 수 없다. **지금 결정해야 한다** — `Repository`가 commit을 멈추고 호출자가 트랜잭션을 소유하는가, 아니면 `transaction()` 컨텍스트 매니저를 추가하는가. 나중에 고치면 모든 쓰기 지점을 건드려야 한다.
+
+**I3. 현재 유일하게 실제 네트워크를 타는 경로에 재시도·레이트리밋이 없다.** `TRANSIENT`에 `requests` 예외가 없고(이미 상수 옆에 문서화됨), `KrxPriceSource.fetch_daily`는 데코레이터도 토큰버킷도 없다. 즉 설계서 §13 1행과 §5.3의 "소스별 토큰버킷"이 KR 주가에 대해 구현이 없다. 42종목에서는 견디지만 KOSPI 200으로 넓히면 일시 장애 한 번이 그 종목을 통째로 날린다.
+
+**I5. `settings.yaml`의 `sources.*`를 아무도 읽지 않는다.** `cli.py`가 `DartSource`·`KrxPriceSource`를 하드코딩한다. 설계서 §5.2의 "파일 하나를 추가하고 설정에서 소스 이름만 바꾸면 된다"가 약속뿐이다. 프로토콜 경계는 제대로 있으니 이름→클래스 매핑만 붙이면 된다. 각 소스의 `name` 값이 이미 설정 문자열(`"dart"`·`"pykrx"`)과 일치한다.
+
+**I7. `net_income`·`total_assets`·`operating_cash_flow`·`shares_outstanding`을 선택 필드로 분류했다.** 설계서 §7.3의 선택 목록에는 없다. §8.3의 유효만점 환산 때문에 결과가 달라진다 — 영업현금흐름이 없는 기업은 현금흐름 축 25점 중 20점이 **분모에서도 빠져** 80점 만점으로 채점된다. 현금흐름 불투명이 실격이 아니라 비가시화된다. §8.3을 구현하기 전에 명시적으로 정해야 한다.
+
+### 계획 B가 알아야 할 것
+
+1. **`json.dumps(float('inf'))`는 유효하지 않은 JSON을 뱉는다.** `interest_coverage`는 이자비용이 0일 때 `float('inf')`를 반환한다(설계서가 요구하는 동작, 무차입이 최선이므로). 그런데 `json.dumps`가 `Infinity`라는 토큰을 내보내고 `JSON.parse`가 이를 거부한다. 무차입 기업이 하나만 있어도 `score_detail`·`signal_reason`이 오염되고 §11 프론트엔드가 깨진다. 직렬화 경계에서 처리할 것. 세 상태 구분은 의도된 것이다 — `None`=결측(§7.3 환산), `inf`=부채 부담 없음(§8.2 만점), 유한값=비율.
+
+2. **`INSUFFICIENT_HISTORY`는 봉 개수나 커버리지 비율이 아니라 기간으로 판정해야 한다 — 단, 연분수로 재면 전 종목이 탈락한다.** LG에너지솔루션(373220)은 2022-01-27 상장으로 1,129봉, 커버리지 92.5%라 §9.1의 `min_data_coverage: 0.8` 관문을 통과하지만 실제 이력은 4.62년이다. 봉 개수나 비율로 재면 이 종목이 통과해 4.6년 평균이 "5년 평균"으로 발표된다.
+
+   그런데 `(MAX(date) - MIN(date)).days / 365.25 >= 5` 로 재면 **정상 종목까지 전부 탈락한다.** 실측: 2021-09-10 ~ 2026-09-10은 정확히 5달력년이지만 1,826일이고, `1826 / 365.25 = 4.9993`이라 5.0 미만이다. 42종목 전부가 `INSUFFICIENT_HISTORY`로 제외된다.
+
+   **달력 기준으로 비교해야 한다:**
+
+   ```python
+   # 옳음 — 첫 봉이 요구 구간의 시작일 이전인가
+   required_start = end_date.replace(year=end_date.year - years)
+   ok = first_bar_date <= required_start
+
+   # 틀림 — 5달력년이 4.9993년으로 계산된다
+   ok = (last_bar_date - first_bar_date).days / 365.25 >= years
+   ```
+
+   `cli.price_window()`가 이미 `date.replace(year=...)`로 같은 계산을 하고 윤일 예외까지 처리한다. 그 함수를 재사용하거나 같은 방식을 쓸 것.
+
+3. **`Financials`의 파생 프로퍼티를 재구현하지 말 것.** `debt_ratio`(%)·`current_ratio`·`operating_margin`·`roe`·`interest_coverage`·`free_cash_flow`가 이미 §8의 정의와 일치하고, 분모가 0 이하일 때 `None`을 반환하도록 방어돼 있다. `capex`·`interest_expense`는 이미 양수 크기로 저장된다.
+
+4. **`op_margin_trend`와 `growth_consistency`는 `bands`가 비어 있다.** §8.2가 이 둘을 절차적으로 정의하기 때문이다(선형회귀 기울기, 증가한 해의 수 × 1.25). 구간 평가기가 `bands`가 비어 있지 않다고 가정하면 안 된다.
+
+5. **현재 유니버스에서 채점 가능한 종목은 약 34개다.** 42개 중 7개가 `is_financial=1`로 `FINANCIAL_SECTOR` 제외, 373220이 `INSUFFICIENT_HISTORY` 제외. 그리고 §9.5대로 첫 실행에서 ★★가 0건이어도 정상이다.
+
+6. **주가는 항상 날짜 구간을 지정해 읽을 것.** `Repository`에 삭제 메서드가 없어 `raw_prices`는 append/upsert만 된다. `price_years`를 줄이면 옛 봉이 남아 있으므로 `get_price_bars(ticker, start=, end=)`를 쓰고 무인자 형태를 쓰지 말 것.
+
+7. **`ACCOUNT_MAP`을 실제 응답으로 검증할 때 `account_nm` 동의어 세 곳을 특히 볼 것.** ① `interest_expense`가 `금융원가`를 받아들인다 — 금융원가는 이자비용보다 넓고, `ifrs-full_InterestExpense`가 보통 주석 항목이라 이 폴백이 실제로 발동할 것이다. 분모가 과대해져 `INTEREST_UNCOVERED` 필터와 10점 지표가 둘 다 무력화된다 ② `total_equity`가 `자본총계(지배기업의 소유주지분)`를 받아들인다 — 지배주주지분은 자본총계가 아니며, 발동하면 `debt_ratio`와 `roe`가 부풀려진다 ③ `pick_amount`가 `sj_div`·`fs_div`를 전혀 보지 않는다. `fnlttSinglAcntAll`은 BS/IS/CIS/CF/SCE를 한 `list`에 담아 주고 `당기순이익`이 여러 곳에 나오는데, `setdefault`가 API가 먼저 준 행을 취한다. 필드별로 재무제표 구분을 걸러야 한다.
+
+8. **`fetch_corp_codes`는 구현·테스트돼 있지만 아무도 호출하지 않고** `securities.source_id`도 비어 있다. `fetch_annual`을 구현하는 사람이 corp_code 캐시 위치와 저장 주체를 함께 정해야 한다.
+
+### Task 8·12·16은 DART API 키를 기다린다
+
+Task 7은 오프라인 범위(파서 + 클라이언트 골격)만 수행했다. 실제 API를 호출하는 Step 1·7은 키가 생긴 뒤 실행한다. Task 8과 12는 삼성전자 실제 응답을 픽스처로 저장한 뒤 그에 맞춰 계정과목을 매핑하는 구조라, 키 없이는 추측이 된다.
+
+---
+
 ## Task 1: 프로젝트 뼈대
 
 **Files:**
@@ -1453,8 +1575,21 @@ T = TypeVar("T")
 # 파이썬 내장 ConnectionError/TimeoutError를 상속하지 않으므로,
 # 내장 예외만 나열하면 실제 네트워크 장애에서 재시도가 전혀 동작하지 않는다.
 #
-# httpx.HTTPStatusError(404·401 등)는 일부러 뺐다. 재시도해도 소용없다 (설계서 §5.3).
-TRANSIENT = (TimeoutError, ConnectionError, OSError, httpx.TransportError)
+# 반대로 bare OSError는 절대 넣지 않는다. PermissionError·FileNotFoundError 같은
+# "영구" 오류가 전부 OSError의 하위클래스라서, OSError를 통째로 넣으면
+# 인증 오류까지 재시도하게 된다. TimeoutError·ConnectionError는 의미가 분명한
+# 개별 하위클래스이므로 명시적으로 나열한다.
+#
+# httpx.HTTPStatusError(404·401 등)도 일부러 뺐다. 재시도해도 소용없다 (설계서 §5.3).
+#
+# 주의 — requests 기반 소스에는 이 튜플이 듣지 않는다.
+# requests.exceptions.ConnectionError는 OSError의 하위클래스지만 내장
+# ConnectionError도 httpx.TransportError도 아니다. pykrx·yfinance가 내부적으로
+# requests를 쓰므로, 그쪽에 @retry_on_transient를 붙이려면 이 튜플에
+# requests.exceptions.(ConnectionError, Timeout)을 명시적으로 더하고
+# 회귀 테스트를 추가해야 한다. 지금은 어느 requests 기반 호출에도
+# 재시도를 걸지 않으므로 의도적으로 비워둔다.
+TRANSIENT = (TimeoutError, ConnectionError, httpx.TransportError)
 
 
 class DailyQuotaExceeded(Exception):
@@ -2329,6 +2464,12 @@ def make(**overrides) -> Financials:
     base = dict(
         ticker="005930.KS", fiscal_year=2025, currency="KRW",
         revenue=300.0, operating_income=30.0, total_equity=200.0, total_liabilities=60.0,
+        # 선택 필드도 기본값을 채운다. 비워두면 missing_fields가 손대지 않은
+        # 선택 필드까지 전부 잡아내서, 특정 필드의 결측만 확인하려는 테스트가
+        # 격리되지 않는다.
+        net_income=10.0, total_assets=100.0, current_assets=50.0,
+        current_liabilities=20.0, interest_expense=1.0, operating_cash_flow=15.0,
+        capex=5.0, shares_outstanding=1000.0, dividend_per_share=1.0,
     )
     base.update(overrides)
     return Financials(**base)

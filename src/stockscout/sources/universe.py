@@ -1,0 +1,83 @@
+"""config/universe.yaml 기반 유니버스.
+
+KRX가 data.krx.co.kr를 로그인 기반으로 전환하면서 get_index_portfolio_deposit_file
+같은 지수 구성종목 API가 익명 접근을 막았다(2026-09 확인). 그래서 구성종목을
+KrxUniverse처럼 자동으로 받는 대신 config/universe.yaml에 손으로 적은 목록을
+읽는다. 종목명은 pykrx 종목별 조회(get_market_ticker_name)로 채우는데, 이쪽은
+여전히 익명으로 동작한다.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Callable
+
+import yaml
+
+from stockscout.models import Security
+from stockscout.sources.krx import to_ticker
+
+DEFAULT_UNIVERSE_PATH = Path("config/universe.yaml")
+
+
+def _default_name_fn(stock_code: str) -> str:
+    from pykrx import stock
+
+    return stock.get_market_ticker_name(stock_code)
+
+
+class YamlUniverse:
+    """config/universe.yaml에 적힌 종목 목록을 읽는다.
+
+    KRX 지수 API가 로그인 필수로 바뀌어 구성종목 자동 수집이 막혔다.
+    종목명만 pykrx 종목별 조회로 채운다 — 그쪽은 익명으로 동작한다.
+    """
+
+    name = "yaml"
+
+    def __init__(
+        self,
+        path: Path | str = DEFAULT_UNIVERSE_PATH,
+        market: str = "KR",
+        name_fn: Callable[[str], str] | None = None,
+    ) -> None:
+        self.path = Path(path)
+        self.market = market
+        self._name = name_fn or _default_name_fn
+
+    def fetch(self) -> list[Security]:
+        if not self.path.exists():
+            raise FileNotFoundError(f"유니버스 설정 파일이 없습니다: {self.path}")
+
+        raw = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
+        if self.market not in raw:
+            raise ValueError(
+                f"유니버스 설정에 '{self.market}' 시장이 없습니다: {self.path}"
+            )
+
+        section = raw[self.market]
+        exchange = section.get("exchange")
+        currency = section.get("currency")
+        tickers: list[str] = section.get("tickers", [])
+        financial: set[str] = set(section.get("is_financial", []))
+
+        securities: list[Security] = []
+        for code in tickers:
+            try:
+                name = self._name(code)
+            except Exception:
+                # 손으로 고른 목록이라 조회 실패는 일시적 네트워크 문제일 뿐,
+                # 종목이 잘못된 게 아니다. KrxUniverse와 달리 건너뛰지 않는다.
+                name = code
+            securities.append(
+                Security(
+                    ticker=to_ticker(code),
+                    market=self.market,
+                    name=name,
+                    exchange=exchange,
+                    currency=currency,
+                    is_financial=code in financial,
+                    in_universe=True,
+                )
+            )
+        return securities
