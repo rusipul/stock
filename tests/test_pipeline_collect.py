@@ -235,3 +235,25 @@ def test_summary_renders_human_readable_text():
     text = summary.render()
 
     assert "8" in text and "2" in text and "40" in text
+
+
+def test_summary_render_is_printable_on_cp949_console():
+    """한국어 Windows 콘솔은 cp949다.
+
+    render()에 U+26A0 같은 기호가 있으면 출력 시 UnicodeEncodeError로
+    죽는데, 하필 일일 한도 소진처럼 남은 종목을 가장 알아야 할 순간에
+    크래시한다. 실제로 그랬던 버그의 회귀 테스트다.
+    """
+    summary = CollectSummary(
+        total=3, succeeded=1, failed=0, aborted=True, remaining=["A", "B"]
+    )
+
+    summary.render().encode("cp949")  # 예외가 나면 실패
+
+
+def test_summary_render_names_remaining_tickers_when_aborted():
+    summary = CollectSummary(total=3, succeeded=1, aborted=True, remaining=["A", "B"])
+
+    text = summary.render()
+
+    assert "A" in text and "B" in text and "2" in text

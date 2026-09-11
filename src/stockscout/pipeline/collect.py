@@ -12,6 +12,13 @@ from stockscout.store.repository import Repository
 
 
 class CollectSummary(BaseModel):
+    """수집 결과 요약.
+
+    render()는 ASCII 기호만 쓴다. 한국어 Windows 콘솔이 cp949라서
+    U+26A0(경고 표시) 같은 문자를 출력하면 UnicodeEncodeError로 죽는다.
+    하필 일일 한도 소진처럼 "남은 종목이 무엇인가"를 가장 알아야 할
+    순간에 크래시하므로, 기호를 쓰지 않는다.
+    """
     total: int = 0
     succeeded: int = 0
     failed: int = 0
@@ -27,7 +34,7 @@ class CollectSummary(BaseModel):
         ]
         if self.aborted:
             lines.append(
-                f"⚠ 일일 한도 소진으로 중단. 남은 종목 {len(self.remaining)}개: "
+                f"[중단] 일일 한도 소진. 남은 종목 {len(self.remaining)}개: "
                 f"{', '.join(self.remaining[:5])}"
                 + (" …" if len(self.remaining) > 5 else "")
             )

@@ -54,6 +54,40 @@ def build_universe(source: str, market: str):
     )
 
 
+class SkippedFundamentals:
+    """재무 수집을 건너뛸 때 쓰는 자리표시자.
+
+    반드시 years=[] 와 함께 쓰인다. collect 파이프라인은 years가 비면
+    소스를 호출하지 않으므로 fetch_annual은 실행되지 않고, name은
+    collect_errors에 남길 소스 이름으로만 쓰인다.
+    """
+
+    name = "skipped"
+
+    def fetch_annual(self, ticker: str, years: list[int]) -> list:
+        raise AssertionError("years=[] 이므로 호출되지 않아야 한다")
+
+
+def build_fundamentals(skip: bool, years: list[int]):
+    """재무 소스와 수집할 회계연도를 정한다.
+
+    주가(pykrx)는 DART 키가 필요 없다. 키 하나가 없다고 수집 전체를
+    막을 이유가 없으므로, 키가 없으면 재무만 건너뛰고 주가는 받는다.
+    수집은 증분이라, 나중에 키를 넣고 다시 돌리면 주가는 건너뛰고
+    재무만 채워진다.
+    """
+    if skip:
+        print("재무제표를 건너뜁니다 (--skip-financials). 주가만 수집합니다.")
+        return SkippedFundamentals(), []
+    try:
+        secrets = load_secrets()
+    except ValueError as exc:
+        print("재무제표를 건너뜁니다. 주가만 수집합니다.", file=sys.stderr)
+        print(f"  이유: {exc}", file=sys.stderr)
+        return SkippedFundamentals(), []
+    return DartSource(secrets.dart_api_key), years
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="stockscout", description="한국·미국 우량주 낙폭 스크리너"
@@ -73,6 +107,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_col.add_argument("--market", default="KR", choices=["KR", "US"])
     p_col.add_argument("--tickers", nargs="+", default=None, help="특정 종목만")
     p_col.add_argument("--force", action="store_true", help="이미 받은 것도 다시 받는다")
+    p_col.add_argument(
+        "--skip-financials", action="store_true",
+        help="주가만 수집한다 (DART 키 없이 동작)",
+    )
 
     p_norm = sub.add_parser("normalize", help="원본을 공통 스키마로 변환한다")
     p_norm.add_argument("--market", default="KR", choices=["KR", "US"])
@@ -94,14 +132,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"유니버스 갱신 완료: {n}종목 (소스: {args.source})")
 
         elif args.command == "collect":
-            secrets = load_secrets()
             start, end = price_window(max(config.lookback.price_years))
+            fundamentals, years = build_fundamentals(
+                skip=args.skip_financials,
+                years=fiscal_years(config.lookback.financial_years),
+            )
             summary = collect_market(
                 repo,
                 market=args.market,
-                fundamentals=DartSource(secrets.dart_api_key),
+                fundamentals=fundamentals,
                 prices=KrxPriceSource(),
-                years=fiscal_years(config.lookback.financial_years),
+                years=years,
                 price_start=start,
                 price_end=end,
                 tickers=args.tickers,

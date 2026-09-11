@@ -119,3 +119,58 @@ def test_main_normalize_on_empty_db_returns_zero(tmp_path, capsys):
     # 않아도 main()은 그냥 0을 반환한다). normalize_market()의 출력이
     # 실제로 찍혔는지까지 확인해야 오배선을 잡아낸다.
     assert "0종목" in capsys.readouterr().out
+
+
+# --- 재무 수집과 주가 수집의 분리 --------------------------------------
+#
+# 주가(pykrx)는 DART 키가 필요 없다. 키 하나가 없다고 수집 전체를 막으면
+# 5년치 주가를 받아둘 수 있는데도 아무것도 못 하게 된다.
+
+
+def test_build_fundamentals_skips_when_flag_set():
+    from stockscout.cli import SkippedFundamentals, build_fundamentals
+
+    source, years = build_fundamentals(skip=True, years=[2024, 2025])
+
+    assert isinstance(source, SkippedFundamentals)
+    assert years == []
+
+
+def test_build_fundamentals_skips_when_no_dart_key(tmp_path, monkeypatch):
+    """키가 없으면 실패하지 말고 주가만 받는다."""
+    from stockscout.cli import SkippedFundamentals, build_fundamentals
+
+    monkeypatch.delenv("DART_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)  # config/.env 가 없는 디렉터리
+
+    source, years = build_fundamentals(skip=False, years=[2024, 2025])
+
+    assert isinstance(source, SkippedFundamentals)
+    assert years == []
+
+
+def test_build_fundamentals_uses_dart_when_key_present(monkeypatch):
+    from stockscout.cli import build_fundamentals
+    from stockscout.sources.dart import DartSource
+
+    monkeypatch.setenv("DART_API_KEY", "dummy-key-for-test")
+
+    source, years = build_fundamentals(skip=False, years=[2024, 2025])
+
+    assert isinstance(source, DartSource)
+    assert years == [2024, 2025]
+
+
+def test_skipped_fundamentals_would_raise_if_ever_called():
+    """years=[] 와 짝지어 쓰이므로 호출될 일이 없다. 계약을 고정해둔다."""
+    from stockscout.cli import SkippedFundamentals
+
+    with pytest.raises(AssertionError):
+        SkippedFundamentals().fetch_annual("005930.KS", [2025])
+
+
+def test_parser_collect_skip_financials_flag():
+    args = build_parser().parse_args(["collect", "--skip-financials"])
+
+    assert args.skip_financials is True
+    assert build_parser().parse_args(["collect"]).skip_financials is False
