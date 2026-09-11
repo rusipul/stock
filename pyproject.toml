@@ -34,3 +34,14 @@ stockscout = ["store/*.sql", "web/static/*"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q"
+# 경고를 에러로 올린다. "항상 경고 N개"가 기본값이 되면 새로 생긴 진짜
+# 경고가 그 속에 묻힌다.
+#
+# 아래 둘은 starlette의 TestClient가 import 시점에 내는 상류 경고로,
+# 우리 코드가 원인이 아니고 우리가 고칠 수도 없다. 메시지를 좁게
+# 지정해 무시하되, 다른 경고는 전부 에러로 남긴다.
+filterwarnings = [
+    "error",
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
+]

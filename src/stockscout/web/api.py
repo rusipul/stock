@@ -55,7 +55,7 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                 passed=sum(1 for r in rows if r["passed_filters"]),
                 excluded=sum(1 for r in rows if not r["passed_filters"]),
                 has_scores=any(r["score_total"] is not None for r in rows),
-                has_financials=any(r["per"] is not None for r in rows),
+                has_valuation=any(r["per"] is not None for r in rows),
             )
 
         return read(build)

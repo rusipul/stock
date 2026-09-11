@@ -21,10 +21,14 @@ class SnapshotInfo(BaseModel):
     passed: int
     excluded: int
 
-    # 프론트가 등급·점수 UI를 켤지 결정하는 근거.
+    # 프론트가 어떤 UI를 켤지 결정하는 근거.
     # 점수가 없는데 등급을 보여주면 품질을 검증한 것처럼 보이는 거짓말이 된다.
     has_scores: bool
-    has_financials: bool
+
+    # 시가총액·PER·PBR을 계산할 수 있었는가. financials 테이블이 채워졌는지와
+    # 다른 질문이다 — 발행주식수는 재무제표 API가 아니라 stockTotqySttus.json
+    # 에서 오므로, 재무는 있는데 밸류에이션은 없는 상태가 가능하다.
+    has_valuation: bool
 
 
 class SecurityRow(BaseModel):

@@ -80,7 +80,7 @@ def test_snapshot_reports_whether_scores_exist(client):
     body = client.get("/api/snapshot").json()
 
     assert body["has_scores"] is False
-    assert body["has_financials"] is False
+    assert body["has_valuation"] is False
 
 
 def test_snapshot_404_when_no_snapshot(tmp_path):

@@ -224,7 +224,7 @@ def test_snapshot_reports_whether_scores_exist(client):
     body = client.get("/api/snapshot").json()
 
     assert body["has_scores"] is False
-    assert body["has_financials"] is False
+    assert body["has_valuation"] is False
 
 
 def test_snapshot_404_when_no_snapshot(tmp_path):
@@ -282,7 +282,11 @@ class SnapshotInfo(BaseModel):
     # 프론트가 등급·점수 UI를 켤지 결정하는 근거.
     # 점수가 없는데 등급을 보여주면 품질을 검증한 것처럼 보이는 거짓말이 된다.
     has_scores: bool
-    has_financials: bool
+
+    # 시가총액·PER·PBR을 계산할 수 있었는가.
+    # financials 테이블이 채워졌는지와 다른 질문이다 — 발행주식수는
+    # 재무제표 API가 아니라 stockTotqySttus.json 에서 온다.
+    has_valuation: bool
 
 
 class SecurityRow(BaseModel):
@@ -381,7 +385,7 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                 passed=sum(1 for r in rows if r["passed_filters"]),
                 excluded=sum(1 for r in rows if not r["passed_filters"]),
                 has_scores=any(r["score_total"] is not None for r in rows),
-                has_financials=any(r["per"] is not None for r in rows),
+                has_valuation=any(r["per"] is not None for r in rows),
             )
 
         return read(build)
@@ -485,12 +489,12 @@ c = TestClient(create_app('data/stockscout.db'))
 s = c.get('/api/snapshot').json()
 print('snapshot', s['snapshot_id'], 'as_of', s['as_of'])
 print('total', s['total'], 'passed', s['passed'], 'excluded', s['excluded'])
-print('has_scores', s['has_scores'], 'has_financials', s['has_financials'])
+print('has_scores', s['has_scores'], 'has_valuation', s['has_valuation'])
 print('index', c.get('/').status_code)
 "
 ```
 
-Expected: `total 42 passed 34 excluded 8`, `has_scores False has_financials False`, `index 200`
+Expected: `total 42 passed 34 excluded 8`, `has_scores False has_valuation False`, `index 200`
 
 - [ ] **Step 10: 전체 스위트를 돌리고 커밋한다**
 
@@ -2438,7 +2442,7 @@ def test_snapshot_matches_cli_counts(snapshot):
 
 def test_scores_are_absent_until_dart_key(snapshot):
     assert snapshot["has_scores"] is False
-    assert snapshot["has_financials"] is False
+    assert snapshot["has_valuation"] is False
 
 
 def test_list_returns_every_security(client, snapshot):
