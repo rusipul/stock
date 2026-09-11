@@ -69,8 +69,9 @@ def test_parser_rejects_unknown_universe_source():
 
 # --- 날짜 계산 --------------------------------------------------------
 
-def test_price_window_spans_requested_years():
-    start, end = price_window(years=5, today=date(2026, 9, 10))
+def test_price_window_excludes_today():
+    """장중 수집 시 오늘 봉은 확정 종가가 아니다. 어제까지만 받는다."""
+    start, end = price_window(years=5, today=date(2026, 9, 11))
 
     assert end == date(2026, 9, 10)
     assert start == date(2021, 9, 10)
@@ -78,9 +79,10 @@ def test_price_window_spans_requested_years():
 
 def test_price_window_handles_leap_day():
     """2/29에 5년을 빼면 존재하지 않는 날짜가 된다."""
-    start, _ = price_window(years=5, today=date(2024, 2, 29))
+    start, end = price_window(years=5, today=date(2024, 3, 1))
 
-    assert start == date(2019, 2, 28)
+    assert end == date(2024, 2, 29)   # 윤일이 종료일이 된다
+    assert start == date(2019, 2, 28)  # 2019년에는 2/29가 없다
 
 
 def test_fiscal_years_excludes_current_year():

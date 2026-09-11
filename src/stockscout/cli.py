@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 from stockscout.config import DEFAULT_CONFIG_PATH, load_config, load_secrets
 from stockscout.pipeline.collect import collect_market, sync_universe
@@ -20,7 +20,23 @@ UNIVERSE_SOURCES = ("yaml", "krx")
 
 
 def price_window(years: int, today: date | None = None) -> tuple[date, date]:
-    end = today or date.today()
+    """수집할 주가 구간. 오늘은 제외한다.
+
+    장중에 수집하면 "오늘 종가"가 확정 종가가 아니라 그 순간의 체결가다.
+    실측: 2026-09-11 11:24에 삼성전자를 두 번 수집했더니 거래량이
+    6,294,923 -> 6,302,129로 늘어나는 중이었고, 몇 분 전 종가는
+    259,750이었는데 258,000으로 바뀌어 있었다.
+
+    그 봉을 담으면 설계서 §6.1이 약속한 "같은 날짜 결과가 항상 동일하게
+    재현된다"가 깨진다. 11시에 계산한 하락률과 14시에 계산한 하락률이
+    달라지고 ★★/★ 등급까지 바뀐다. 개장 직후에 돌리면 시가 한 틱이
+    "현재가"가 된다.
+
+    그래서 하루 늦은 확정 종가를 쓴다. 5년 평균 대비 -40%를 재는
+    도구에서 장중 몇 시간의 노이즈는 신호와 무관하다. 주말·공휴일이면
+    해당 날짜에 봉이 없을 뿐이므로 거래일 계산은 따로 하지 않는다.
+    """
+    end = (today or date.today()) - timedelta(days=1)
     try:
         start = end.replace(year=end.year - years)
     except ValueError:  # 2월 29일
