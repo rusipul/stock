@@ -11,7 +11,7 @@ from stockscout.config import DEFAULT_CONFIG_PATH, load_config, load_secrets
 from stockscout.pipeline.collect import collect_market, sync_universe
 from stockscout.pipeline.normalize import normalize_market
 from stockscout.sources.dart import DartSource
-from stockscout.sources.krx import KrxPriceSource, KrxUniverse
+from stockscout.sources.krx import KrxPriceSource, KrxUniverse, to_ticker
 from stockscout.sources.universe import YamlUniverse
 from stockscout.store.db import DEFAULT_DB_PATH, connect, init_db
 from stockscout.store.repository import Repository
@@ -88,6 +88,35 @@ def build_fundamentals(skip: bool, years: list[int]):
     return DartSource(secrets.dart_api_key), years
 
 
+def resolve_tickers(
+    repo: Repository, market: str, tickers: list[str] | None
+) -> list[str] | None:
+    """--tickers 인자를 DB의 ticker 형식으로 맞추고, 목록에 없는 종목을 경고한다.
+
+    DB의 ticker는 거래소 접미사가 붙는다('005930.KS'). 증권사 화면에 찍히는
+    코드는 접미사가 없는 6자리('005930')라서, 맞춰주지 않으면
+    collect_market()의 문자열 비교가 실패해 대상 0종목으로 조용히 끝난다
+    (버그 I6). to_ticker()는 무조건 '.KS'를 붙이므로 KR에서만 쓴다.
+
+    오탈자나 in_universe=0인 종목은 collect_market()이 조용히 건너뛰므로,
+    여기서 이름을 밝혀 경고한다.
+    """
+    if tickers is None:
+        return None
+    if market == "KR":
+        tickers = [to_ticker(t) for t in tickers]
+
+    known = {s.ticker: s for s in repo.list_securities(market=market, in_universe_only=False)}
+    for ticker in tickers:
+        security = known.get(ticker)
+        if security is None:
+            print(f"경고: 알 수 없는 종목입니다 (목록에 없음): {ticker}")
+        elif not security.in_universe:
+            print(f"경고: 분석 대상에서 제외된 종목입니다 (in_universe=0): {ticker}")
+
+    return tickers
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="stockscout", description="한국·미국 우량주 낙폭 스크리너"
@@ -132,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"유니버스 갱신 완료: {n}종목 (소스: {args.source})")
 
         elif args.command == "collect":
+            tickers = resolve_tickers(repo, market=args.market, tickers=args.tickers)
             start, end = price_window(max(config.lookback.price_years))
             fundamentals, years = build_fundamentals(
                 skip=args.skip_financials,
@@ -145,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
                 years=years,
                 price_start=start,
                 price_end=end,
-                tickers=args.tickers,
+                tickers=tickers,
                 force=args.force,
             )
             print(summary.render())

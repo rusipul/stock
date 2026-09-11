@@ -3,8 +3,18 @@ from datetime import date
 import pytest
 
 from stockscout.cli import build_parser, build_universe, fiscal_years, main, price_window
+from stockscout.models import Security
 from stockscout.sources.krx import KrxUniverse
 from stockscout.sources.universe import YamlUniverse
+from stockscout.store.db import connect, init_db
+from stockscout.store.repository import Repository
+
+
+@pytest.fixture
+def repo(tmp_path):
+    with connect(tmp_path / "t.db") as conn:
+        init_db(conn)
+        yield Repository(conn)
 
 
 # --- 인자 파싱 --------------------------------------------------------
@@ -174,3 +184,114 @@ def test_parser_collect_skip_financials_flag():
 
     assert args.skip_financials is True
     assert build_parser().parse_args(["collect"]).skip_financials is False
+
+
+# --- I6: --tickers 의 6자리 코드가 조용히 0건으로 새는 버그 -----------------
+#
+# DB의 ticker는 항상 거래소 접미사가 붙는다('005930.KS'). 그런데 증권사
+# 화면에 찍히는 코드는 접미사가 없는 6자리('005930')다. collect_market()은
+# 문자열을 그대로 비교하므로, 정규화하지 않으면 대상 0종목·조용한 성공(exit 0)이
+# 된다. resolve_tickers()가 KR에서는 krx.to_ticker()로 맞추고, DB에 없거나
+# in_universe=0인 티커는 이름을 밝혀 경고한다.
+
+
+def test_resolve_tickers_normalizes_kr_plain_code(repo, capsys):
+    from stockscout.cli import resolve_tickers
+
+    repo.upsert_security(
+        Security(ticker="005930.KS", market="KR", name="삼성전자", currency="KRW")
+    )
+
+    tickers = resolve_tickers(repo, market="KR", tickers=["005930"])
+
+    assert tickers == ["005930.KS"]
+    assert "경고" not in capsys.readouterr().out
+
+
+def test_resolve_tickers_leaves_already_suffixed_kr_code_unchanged(repo):
+    from stockscout.cli import resolve_tickers
+
+    repo.upsert_security(
+        Security(ticker="005930.KS", market="KR", name="삼성전자", currency="KRW")
+    )
+
+    tickers = resolve_tickers(repo, market="KR", tickers=["005930.KS"])
+
+    assert tickers == ["005930.KS"]
+
+
+def test_resolve_tickers_warns_on_unknown_ticker(repo, capsys):
+    """오타 등 목록에 없는 티커는 이름을 밝혀 경고해야 한다. 조용히 넘어가면 안 된다."""
+    from stockscout.cli import resolve_tickers
+
+    resolve_tickers(repo, market="KR", tickers=["999999"])
+
+    out = capsys.readouterr().out
+    assert "999999.KS" in out
+
+
+def test_resolve_tickers_warns_on_out_of_universe_ticker(repo, capsys):
+    """DB에는 있지만 in_universe=0이면 collect_market()이 건너뛴다. 그 사실도 알려야 한다."""
+    from stockscout.cli import resolve_tickers
+
+    repo.upsert_security(
+        Security(
+            ticker="005930.KS", market="KR", name="삼성전자",
+            currency="KRW", in_universe=False,
+        )
+    )
+
+    resolve_tickers(repo, market="KR", tickers=["005930"])
+
+    out = capsys.readouterr().out
+    assert "005930.KS" in out
+
+
+def test_resolve_tickers_does_not_append_ks_suffix_for_non_kr_market(repo):
+    """to_ticker()는 무조건 .KS를 붙인다. KR이 아닌 시장에는 적용하면 안 된다."""
+    from stockscout.cli import resolve_tickers
+
+    tickers = resolve_tickers(repo, market="US", tickers=["AAPL"])
+
+    assert tickers == ["AAPL"]
+
+
+def test_resolve_tickers_passes_through_none(repo):
+    from stockscout.cli import resolve_tickers
+
+    assert resolve_tickers(repo, market="KR", tickers=None) is None
+
+
+def test_main_collect_normalizes_plain_kr_ticker_before_dispatch(tmp_path, monkeypatch):
+    """--tickers 005930 이 collect_market()에는 '005930.KS'로 도달해야 한다.
+
+    수정 전에는 args.tickers가 그대로 전달되어 DB 티커('005930.KS')와
+    매칭되지 않고, 대상 0종목으로 조용히 끝난다.
+    """
+    from stockscout.pipeline.collect import CollectSummary
+
+    db_path = tmp_path / "scout.db"
+    with connect(db_path) as conn:
+        init_db(conn)
+        Repository(conn).upsert_security(
+            Security(ticker="005930.KS", market="KR", name="삼성전자", currency="KRW")
+        )
+
+    captured = {}
+
+    def fake_collect_market(
+        repo, market, fundamentals, prices, years, price_start, price_end,
+        tickers=None, force=False,
+    ):
+        captured["tickers"] = tickers
+        return CollectSummary(total=0)
+
+    monkeypatch.setattr("stockscout.cli.collect_market", fake_collect_market)
+
+    exit_code = main([
+        "--db", str(db_path), "--config", "config/settings.yaml",
+        "collect", "--market", "KR", "--tickers", "005930", "--skip-financials",
+    ])
+
+    assert exit_code == 0
+    assert captured["tickers"] == ["005930.KS"]
