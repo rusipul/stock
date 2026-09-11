@@ -159,3 +159,51 @@ def test_blank_env_var_does_not_override_dotenv(tmp_path, monkeypatch):
     monkeypatch.setenv("DART_API_KEY", "")
 
     assert load_secrets(env).dart_api_key == "from-file"
+
+
+# --- 저장 가능한 창 ---------------------------------------------------
+
+
+def test_unsupported_price_window_is_rejected(tmp_path):
+    """스키마에 없는 창은 설정 단계에서 막는다.
+
+    analysis_results에는 avg_price_1y/3y/5y 컬럼만 있다. 2년 창을
+    허용하면 계산은 되지만 저장 시 조용히 버려지고, 출력 단계에서
+    drop_vs_avg_2y를 읽으며 잡히지 않는 KeyError로 analyze 명령
+    전체가 죽는다. 실제로 재현됐던 경로다.
+    """
+    path = tmp_path / "settings.yaml"
+    path.write_text(
+        "lookback:\n  price_years: [1, 2, 3, 5]\n  primary_window: 2\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="저장할 수 없는 창"):
+        load_config(path)
+
+
+def test_error_names_the_offending_window_and_the_allowed_set(tmp_path):
+    path = tmp_path / "settings.yaml"
+    path.write_text(
+        "lookback:\n  price_years: [1, 3, 4, 5]\n  primary_window: 5\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc:
+        load_config(path)
+
+    message = str(exc.value)
+    assert "[4]" in message
+    assert "[1, 3, 5]" in message
+
+
+def test_subset_of_supported_windows_is_allowed(tmp_path):
+    """전부 쓰지 않아도 된다. 1년과 3년만으로도 유효하다."""
+    path = tmp_path / "settings.yaml"
+    path.write_text(
+        "lookback:\n  price_years: [1, 3]\n  primary_window: 3\n", encoding="utf-8"
+    )
+
+    cfg = load_config(path)
+
+    assert cfg.lookback.price_years == [1, 3]

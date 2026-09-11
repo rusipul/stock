@@ -13,6 +13,12 @@ from pydantic import BaseModel, Field, model_validator
 DEFAULT_CONFIG_PATH = Path("config/settings.yaml")
 DEFAULT_ENV_PATH = Path("config/.env")
 
+# 저장 가능한 창은 스키마가 정한다. analysis_results에 avg_price_1y/3y/5y와
+# drop_vs_avg_1y/3y/5y 컬럼만 있으므로(설계서 §6), 다른 창을 설정하면
+# 계산은 되지만 저장 시 조용히 버려지고 출력 단계에서 KeyError로 죽는다.
+# 설정 로드 시점에 분명한 메시지로 막는다.
+SUPPORTED_PRICE_WINDOWS = (1, 3, 5)
+
 
 class UniverseConfig(BaseModel):
     markets: list[Literal["KR", "US"]] = ["KR", "US"]
@@ -26,6 +32,17 @@ class LookbackConfig(BaseModel):
     primary_window: int = 5
     financial_years: int = 5
     min_data_coverage: float = Field(default=0.8, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def windows_must_be_storable(self) -> "LookbackConfig":
+        unsupported = sorted(set(self.price_years) - set(SUPPORTED_PRICE_WINDOWS))
+        if unsupported:
+            raise ValueError(
+                f"price_years에 저장할 수 없는 창이 있습니다: {unsupported} "
+                f"(가능: {list(SUPPORTED_PRICE_WINDOWS)}). "
+                "analysis_results 테이블에 해당 컬럼이 없습니다"
+            )
+        return self
 
     @model_validator(mode="after")
     def primary_window_must_be_available(self) -> "LookbackConfig":
