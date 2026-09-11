@@ -175,11 +175,12 @@ def test_multiple_windows_computed_independently():
 # 버그로 명시한다.
 
 
-def test_as_of_before_last_bar_lets_future_bar_leak_into_price_current():
-    """현재 동작: price_current가 as_of 이후 봉(130, 01-04)을 그대로 쓴다.
+def test_as_of_caps_price_current_no_look_ahead():
+    """as_of 이후 봉은 현재가에 섞이지 않는다.
 
-    이상적으로는 as_of(01-02) 시점의 봉(110)이어야 한다. 이 테스트가
-    깨진다면 구현이 바뀐 것이니 아래 실제값을 재검토할 것.
+    금융 도구에서 가장 위험한 버그 유형이 look-ahead bias다. "2024년
+    1월에 이 스크리너가 뭐라고 했나"를 물었을 때 미래 가격이 답에
+    섞이면, 전략이 실제보다 좋아 보이면서 아무 에러도 나지 않는다.
     """
     series = bars(closes=[100.0, 110.0, 120.0, 130.0])  # 2021-01-01..04
     as_of = date(2021, 1, 2)   # 두 번째 봉(110) 시점
@@ -188,25 +189,34 @@ def test_as_of_before_last_bar_lets_future_bar_leak_into_price_current():
     stats = compute_price_stats(series, as_of=as_of, windows=[1],
                                 calendar=calendar, min_coverage=0.8)
 
-    assert stats.price_current == 130.0   # 실제 동작(버그): 110이 이상적
+    assert stats.price_current == 110.0   # 130(01-04)이 아니다
 
 
-def test_as_of_before_last_bar_lets_future_bar_leak_into_high_5y():
-    """현재 동작: high_5y와 price_current 모두 as_of 이후 봉을 반영한다.
+def test_as_of_caps_high_5y_no_look_ahead():
+    """고점도 as_of로 상한을 둔다.
 
-    이상적으로는 둘 다 100(as_of=01-01 시점의 유일한 유효 봉)이어야
-    한다. in_five는 "b.date >= five_year_start"만 걸러 위쪽(과거) 경계만
-    지키고 "b.date <= as_of" 상한이 없다.
+    in_five가 five_year_start 하한만 걸러 상한이 없으면, 과거 시점을
+    물었을 때 미래의 고점이 "그때의 5년 고점"으로 보고된다.
     """
     series = bars(closes=[100.0, 300.0, 120.0])  # 01-01, 01-02, 01-03
-    as_of = date(2021, 1, 1)   # 첫 봉(100)만 유효해야 하는 시점
+    as_of = date(2021, 1, 1)   # 첫 봉(100)만 유효한 시점
     calendar = [b.date for b in series]
 
     stats = compute_price_stats(series, as_of=as_of, windows=[1],
                                 calendar=calendar, min_coverage=0.8)
 
-    assert stats.high_5y == 300.0        # 실제 동작(버그): 100이 이상적
-    assert stats.price_current == 120.0  # 실제 동작(버그): 100이 이상적
+    assert stats.high_5y == 100.0        # 300(01-02)이 아니다
+    assert stats.price_current == 100.0
+    assert stats.drop_vs_high == pytest.approx(0.0)
+
+
+def test_all_bars_after_as_of_raises():
+    """as_of 이전 봉이 하나도 없으면 계산할 수 없다."""
+    series = bars(start=date(2026, 1, 1), closes=[100.0, 110.0])
+
+    with pytest.raises(ValueError, match="이전에 없습니다"):
+        compute_price_stats(series, as_of=date(2025, 1, 1), windows=[1],
+                            calendar=[date(2025, 1, 1)], min_coverage=0.8)
 
 
 # --- 추가: 0 이하 평균 ------------------------------------------------
