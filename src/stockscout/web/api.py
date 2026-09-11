@@ -13,7 +13,7 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -247,6 +247,26 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
             )
 
         return read(build)
+
+    @app.get("/api/watchlist", response_model=list[str])
+    def get_watchlist() -> list[str]:
+        return read(lambda repo: sorted(repo.watchlist_tickers()))
+
+    @app.post("/api/watchlist/{ticker}", status_code=204)
+    def add_watchlist(ticker: str) -> Response:
+        def run(repo: Repository) -> None:
+            if repo.get_security(ticker) is None:
+                raise HTTPException(
+                    status_code=404, detail=f"{ticker} 는 종목 목록에 없습니다.")
+            repo.add_to_watchlist(ticker)
+
+        read(run)
+        return Response(status_code=204)
+
+    @app.delete("/api/watchlist/{ticker}", status_code=204)
+    def remove_watchlist(ticker: str) -> Response:
+        read(lambda repo: repo.remove_from_watchlist(ticker))
+        return Response(status_code=204)
 
     @app.get("/")
     def index() -> FileResponse:
