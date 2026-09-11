@@ -461,3 +461,18 @@ def test_main_analyze_top_zero_suppresses_ranking_table(tmp_path, monkeypatch, c
     out = capsys.readouterr().out
     assert exit_code == 0
     assert out == "1종목 분석 · 통과 1 · 제외 0\n스냅샷 #1 저장\n"
+
+
+def test_parser_serve_command():
+    args = build_parser().parse_args(["serve"])
+
+    assert args.command == "serve"
+    assert args.host == "127.0.0.1"
+    assert args.port == 8000
+
+
+def test_parser_serve_accepts_host_and_port():
+    args = build_parser().parse_args(["serve", "--host", "0.0.0.0", "--port", "9000"])
+
+    assert args.host == "0.0.0.0"
+    assert args.port == 9000

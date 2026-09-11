@@ -134,6 +134,21 @@ def resolve_tickers(
     return tickers
 
 
+def serve(db_path: str, host: str, port: int) -> None:
+    """개발용 서버를 띄운다.
+
+    uvicorn과 web 모듈을 함수 안에서 import한다. 다른 하위명령은
+    FastAPI가 필요 없으므로, 최상단에서 import하면 collect 한 번
+    돌리는 데도 웹 스택 전체가 로드된다.
+    """
+    import uvicorn
+
+    from stockscout.web.api import create_app
+
+    print(f"http://{host}:{port} 에서 실행 중입니다. 종료하려면 Ctrl+C.")
+    uvicorn.run(create_app(db_path), host=host, port=port, log_level="warning")
+
+
 def render_ranking(repo, snapshot_id: int, top: int, window: int) -> str:
     """하락률 상위 종목표. ASCII 기호만 쓴다 (콘솔이 cp949다)."""
     rows = [r for r in repo.get_analysis_results(snapshot_id)
@@ -190,6 +205,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_ana.add_argument("--top", type=int, default=20,
                        help="하락률 상위 몇 종목을 출력할지")
 
+    p_srv = sub.add_parser("serve", help="브라우저에서 결과를 본다")
+    p_srv.add_argument("--host", default="127.0.0.1")
+    p_srv.add_argument("--port", type=int, default=8000)
+
     return parser
 
 
@@ -241,6 +260,9 @@ def main(argv: list[str] | None = None) -> int:
                 print()
                 print(render_ranking(repo, summary.snapshot_id, args.top,
                                      config.lookback.primary_window))
+
+        elif args.command == "serve":
+            serve(args.db, host=args.host, port=args.port)
 
     return 0
 
