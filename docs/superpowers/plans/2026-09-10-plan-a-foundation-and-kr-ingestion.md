@@ -151,7 +151,22 @@ PBR        = 현재가 ÷ BPS                  → NULL
 
 1. **`json.dumps(float('inf'))`는 유효하지 않은 JSON을 뱉는다.** `interest_coverage`는 이자비용이 0일 때 `float('inf')`를 반환한다(설계서가 요구하는 동작, 무차입이 최선이므로). 그런데 `json.dumps`가 `Infinity`라는 토큰을 내보내고 `JSON.parse`가 이를 거부한다. 무차입 기업이 하나만 있어도 `score_detail`·`signal_reason`이 오염되고 §11 프론트엔드가 깨진다. 직렬화 경계에서 처리할 것. 세 상태 구분은 의도된 것이다 — `None`=결측(§7.3 환산), `inf`=부채 부담 없음(§8.2 만점), 유한값=비율.
 
-2. **`INSUFFICIENT_HISTORY`는 봉 개수나 커버리지 비율이 아니라 기간(span)으로 판정해야 한다.** LG에너지솔루션(373220)은 2022-01-27 상장으로 1,130봉 = 커버리지 92.5%라 §9.1의 `min_data_coverage: 0.8` 관문을 통과하지만, 실제 기간은 4.62년이다. 그대로 두면 4.6년 평균이 "5년 평균"으로 발표된다. `MAX(date) - MIN(date)`로 재야 한다.
+2. **`INSUFFICIENT_HISTORY`는 봉 개수나 커버리지 비율이 아니라 기간으로 판정해야 한다 — 단, 연분수로 재면 전 종목이 탈락한다.** LG에너지솔루션(373220)은 2022-01-27 상장으로 1,129봉, 커버리지 92.5%라 §9.1의 `min_data_coverage: 0.8` 관문을 통과하지만 실제 이력은 4.62년이다. 봉 개수나 비율로 재면 이 종목이 통과해 4.6년 평균이 "5년 평균"으로 발표된다.
+
+   그런데 `(MAX(date) - MIN(date)).days / 365.25 >= 5` 로 재면 **정상 종목까지 전부 탈락한다.** 실측: 2021-09-10 ~ 2026-09-10은 정확히 5달력년이지만 1,826일이고, `1826 / 365.25 = 4.9993`이라 5.0 미만이다. 42종목 전부가 `INSUFFICIENT_HISTORY`로 제외된다.
+
+   **달력 기준으로 비교해야 한다:**
+
+   ```python
+   # 옳음 — 첫 봉이 요구 구간의 시작일 이전인가
+   required_start = end_date.replace(year=end_date.year - years)
+   ok = first_bar_date <= required_start
+
+   # 틀림 — 5달력년이 4.9993년으로 계산된다
+   ok = (last_bar_date - first_bar_date).days / 365.25 >= years
+   ```
+
+   `cli.price_window()`가 이미 `date.replace(year=...)`로 같은 계산을 하고 윤일 예외까지 처리한다. 그 함수를 재사용하거나 같은 방식을 쓸 것.
 
 3. **`Financials`의 파생 프로퍼티를 재구현하지 말 것.** `debt_ratio`(%)·`current_ratio`·`operating_margin`·`roe`·`interest_coverage`·`free_cash_flow`가 이미 §8의 정의와 일치하고, 분모가 0 이하일 때 `None`을 반환하도록 방어돼 있다. `capex`·`interest_expense`는 이미 양수 크기로 저장된다.
 
