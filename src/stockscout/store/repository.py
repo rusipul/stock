@@ -372,6 +372,12 @@ class Repository:
             row = self.conn.execute("SELECT MAX(date) AS d FROM raw_prices").fetchone()
         return date.fromisoformat(row["d"]) if row and row["d"] else None
 
+    # --- 관심종목 -----------------------------------------------------
+
+    def watchlist_tickers(self) -> set[str]:
+        rows = self.conn.execute("SELECT ticker FROM watchlist").fetchall()
+        return {r["ticker"] for r in rows}
+
     # --- 오류 기록 ---------------------------------------------------
 
     def record_error(self, ticker: str, source: str, message: str) -> None:
