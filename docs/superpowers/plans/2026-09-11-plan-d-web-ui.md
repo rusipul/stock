@@ -1241,7 +1241,12 @@ def test_unsupported_years_is_rejected(client):
     assert response.status_code == 422
 
 
-def test_ticker_without_prices_returns_empty_series(client, db):
+def test_ticker_in_master_but_absent_from_snapshot_is_404(client, db):
+    """이름 주의 — 이 테스트는 "주가 없음"이 아니라 "스냅샷에 없음" 분기를 탄다.
+
+    EMPTY.KS 를 securities 에만 넣고 스냅샷에는 넣지 않으므로, 404가
+    앞쪽 분기에서 난다. 진짜 no-bars 분기는 아래 테스트가 덮는다.
+    """
     with connect(db) as conn:
         Repository(conn).upsert_security(Security(
             ticker="EMPTY.KS", market="KR", name="빈종목", currency="KRW"))
@@ -1294,7 +1299,7 @@ class PriceSeries(BaseModel):
     @app.get("/api/securities/{ticker}/prices", response_model=PriceSeries)
     def get_prices(
         ticker: str,
-        years: Literal[1, 3, 5] = 5,
+        years: ChartWindow = ChartWindow.FIVE,
     ) -> PriceSeries:
         def build(repo: Repository) -> PriceSeries:
             snap = repo.get_latest_snapshot()
@@ -1335,6 +1340,25 @@ class PriceSeries(BaseModel):
 
 ```python
 from datetime import date
+from enum import IntEnum
+```
+
+`STATIC_DIR` 아래에 구간 열거형을 둔다:
+
+```python
+class ChartWindow(IntEnum):
+    """차트에 그릴 구간(년). 스키마가 허용값을 스스로 문서화한다.
+
+    Literal[1, 3, 5]를 쓰면 안 된다. 이 FastAPI/pydantic 조합에서
+    쿼리스트링 "1"이 int 리터럴 1로 캐스팅되지 않아 1·3·5가 전부
+    422로 거부된다(실측 확인). 정수 Literal만 그렇고, sort 파라미터의
+    Literal["drop", "name", "ticker"]처럼 문자열 Literal은 정상이다.
+    IntEnum은 정상 캐스팅되고 OpenAPI 스키마에도 허용값이 남는다.
+    """
+
+    ONE = 1
+    THREE = 3
+    FIVE = 5
 ```
 
 `_rationale` 옆에 헬퍼를 추가한다:

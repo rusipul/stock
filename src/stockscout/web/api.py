@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from enum import IntEnum
 from pathlib import Path
 from typing import Literal
 
@@ -28,6 +29,20 @@ from stockscout.web.schemas import (
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+class ChartWindow(IntEnum):
+    """차트에 그릴 구간(년). 스키마가 허용값을 스스로 문서화한다.
+
+    Literal[1, 3, 5]를 쓰면 안 된다. 이 FastAPI/pydantic 조합에서
+    쿼리스트링 "1"이 int 리터럴 1로 캐스팅되지 않아 1·3·5가 전부
+    422로 거부된다(실측 확인). IntEnum은 정상 캐스팅되고 OpenAPI
+    스키마에도 허용값이 남는다.
+    """
+
+    ONE = 1
+    THREE = 3
+    FIVE = 5
 
 
 def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
@@ -197,18 +212,8 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
     @app.get("/api/securities/{ticker}/prices", response_model=PriceSeries)
     def get_prices(
         ticker: str,
-        years: int = 5,
+        years: ChartWindow = ChartWindow.FIVE,
     ) -> PriceSeries:
-        # Literal[1, 3, 5]을 파라미터 타입에 그대로 쓰면 이 FastAPI/pydantic
-        # 조합(0.141.1 / 2.13.5)에서 쿼리스트링 "1"이 int 리터럴 1로
-        # 캐스팅되지 않고 항상 422가 난다 — pydantic-core가 문자열
-        # 검증 모드에서 int Literal을 원본 문자열과 그대로 비교하기
-        # 때문이다(1도 3도 5도 전부 거부됨). int로 받고 여기서 직접
-        # 검사해 실제로 원하는 동작(1·3·5는 통과, 그 외는 422)을 낸다.
-        if years not in (1, 3, 5):
-            raise HTTPException(
-                status_code=422, detail="years 는 1, 3, 5 중 하나여야 합니다.")
-
         def build(repo: Repository) -> PriceSeries:
             snap = repo.get_latest_snapshot()
             if snap is None:
