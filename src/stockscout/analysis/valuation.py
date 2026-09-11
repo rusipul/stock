@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from stockscout.models import PriceBar, PriceStats
+from stockscout.models import Financials, PriceBar, PriceStats, Valuation
 
 
 def window_start(as_of: date, years: int) -> date:
@@ -84,3 +84,41 @@ def compute_price_stats(
         drop_vs_avg=drop_vs_avg,
         drop_vs_high=price_current / high_5y - 1 if high_5y > 0 else 0.0,
     )
+
+
+def compute_valuation(price: float, latest: Financials | None) -> Valuation:
+    """시가총액·PER·PBR (설계서 §9.2).
+
+    화면 표시와 정렬에만 쓴다. 점수에는 넣지 않는다 — 설계서 §8.2가
+    밸류에이션을 스코어링에서 뺐기 때문이다.
+
+    발행주식수가 없으면 셋 다 None이다. DART의 단일회사 전체 재무제표
+    API(fnlttSinglAcntAll)는 발행주식수를 주지 않고 「주식의 총수 현황」
+    이라는 별도 공시 항목에 있으므로, 그것을 수집하기 전까지는 항상
+    None이 된다.
+
+    세 지표는 서로 독립이다. 적자 기업이라 PER이 없어도 시가총액과
+    PBR은 남긴다.
+    """
+    if latest is None or not latest.shares_outstanding:
+        return Valuation()
+
+    shares = latest.shares_outstanding
+    if shares <= 0:
+        return Valuation()
+
+    market_cap = price * shares
+
+    per = None
+    if latest.net_income is not None:
+        eps = latest.net_income / shares
+        if eps > 0:
+            per = price / eps
+
+    pbr = None
+    if latest.total_equity is not None:
+        bps = latest.total_equity / shares
+        if bps > 0:
+            pbr = price / bps
+
+    return Valuation(market_cap=market_cap, per=per, pbr=pbr)

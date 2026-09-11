@@ -2,8 +2,8 @@ from datetime import date, timedelta
 
 import pytest
 
-from stockscout.analysis.valuation import compute_price_stats, window_start
-from stockscout.models import PriceBar
+from stockscout.analysis.valuation import compute_price_stats, compute_valuation, window_start
+from stockscout.models import Financials, PriceBar
 
 
 def bars(ticker="X", start=date(2021, 1, 1), closes=None):
@@ -257,3 +257,99 @@ def test_unsorted_input_still_finds_latest_close_by_date():
                                 calendar=calendar, min_coverage=0.8)
 
     assert stats.price_current == 130.0
+
+
+# --- 밸류에이션 (설계서 §9.2) -----------------------------------------
+
+
+def fin(**overrides) -> Financials:
+    base = dict(ticker="X", fiscal_year=2025, currency="KRW",
+                revenue=1000.0, operating_income=100.0, total_equity=500.0,
+                total_liabilities=200.0, net_income=50.0,
+                shares_outstanding=100.0)
+    base.update(overrides)
+    return Financials(**base)
+
+
+def test_valuation_computes_market_cap_per_pbr():
+    v = compute_valuation(price=60.0, latest=fin())
+
+    assert v.market_cap == pytest.approx(6000.0)   # 60 x 100
+    assert v.per == pytest.approx(120.0)           # 60 / (50/100)
+    assert v.pbr == pytest.approx(12.0)            # 60 / (500/100)
+
+
+def test_valuation_is_all_none_without_shares():
+    v = compute_valuation(price=60.0, latest=fin(shares_outstanding=None))
+
+    assert (v.market_cap, v.per, v.pbr) == (None, None, None)
+
+
+def test_valuation_is_all_none_without_financials():
+    v = compute_valuation(price=60.0, latest=None)
+
+    assert (v.market_cap, v.per, v.pbr) == (None, None, None)
+
+
+def test_per_is_none_when_eps_nonpositive():
+    """적자 기업의 PER은 의미가 없다 (설계서 §9.2)."""
+    assert compute_valuation(price=60.0, latest=fin(net_income=-10.0)).per is None
+    assert compute_valuation(price=60.0, latest=fin(net_income=0.0)).per is None
+
+
+def test_pbr_is_none_when_bps_nonpositive():
+    assert compute_valuation(price=60.0, latest=fin(total_equity=-10.0)).pbr is None
+
+
+def test_market_cap_survives_when_per_is_none():
+    """지표는 각각 독립이다. 하나가 없다고 나머지를 지우지 않는다."""
+    v = compute_valuation(price=60.0, latest=fin(net_income=-10.0))
+
+    assert v.market_cap == pytest.approx(6000.0)
+    assert v.per is None
+    assert v.pbr == pytest.approx(12.0)
+
+
+def test_zero_shares_does_not_divide_by_zero():
+    v = compute_valuation(price=60.0, latest=fin(shares_outstanding=0.0))
+
+    assert (v.market_cap, v.per, v.pbr) == (None, None, None)
+
+
+def test_negative_shares_yields_all_none():
+    """발행주식수가 음수인 데이터는 있을 수 없지만, 방어적으로 짜여 있는지 확인한다.
+
+    첫 번째 관문(`not latest.shares_outstanding`)은 None과 0.0만 걸러낸다.
+    음수는 그 관문을 통과하므로, 음수를 걸러내는 두 번째 관문
+    (`shares <= 0`)이 실제로 쓰인다는 것을 이 테스트가 고정한다.
+    """
+    v = compute_valuation(price=60.0, latest=fin(shares_outstanding=-100.0))
+
+    assert (v.market_cap, v.per, v.pbr) == (None, None, None)
+
+
+def test_per_is_none_when_net_income_missing():
+    """net_income이 아예 없을 때도 (음수·0이 아니라 None) PER만 빠진다."""
+    v = compute_valuation(price=60.0, latest=fin(net_income=None))
+
+    assert v.market_cap == pytest.approx(6000.0)
+    assert v.per is None
+    assert v.pbr == pytest.approx(12.0)
+
+
+def test_pbr_is_none_when_total_equity_missing():
+    """total_equity가 아예 없을 때도 (음수·0이 아니라 None) PBR만 빠진다."""
+    v = compute_valuation(price=60.0, latest=fin(total_equity=None))
+
+    assert v.market_cap == pytest.approx(6000.0)
+    assert v.per == pytest.approx(120.0)
+    assert v.pbr is None
+
+
+def test_zero_price_does_not_crash():
+    """가격 0은 krx.py가 걸러내지만(§9.1), 이 함수 자체는 크래시 없이 0을 낸다."""
+    v = compute_valuation(price=0.0, latest=fin())
+
+    assert v.market_cap == pytest.approx(0.0)
+    assert v.per == pytest.approx(0.0)
+    assert v.pbr == pytest.approx(0.0)
