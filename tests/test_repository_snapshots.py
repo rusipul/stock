@@ -279,3 +279,77 @@ def test_latest_price_date_any_is_the_true_max_across_tickers(repo):
     )
 
     assert repo.latest_price_date_any() == date(2026, 2, 9)
+
+
+# --- first_price_date -----------------------------------------------------
+#
+# 이력 필터가 "진짜" 첫 봉을 조회 구간과 무관하게 알아야 하기 때문에
+# 추가됐다. get_price_bars(start=..., end=...)로 잘라 읽은 목록에서
+# min()을 구하던 옛 방식은, min_history_years가 그 구간의 길이와 같을
+# 때(기본값 5년) 목록의 최솟값이 구성상 항상 구간 시작일 이상이 되어
+# "구간 시작일이 거래일인가"만 묻는 것으로 퇴화했다. first_price_date는
+# 구간 인자를 아예 받지 않음으로써 그 함정을 원천 차단한다.
+
+
+def test_first_price_date_is_none_when_empty(repo):
+    assert repo.first_price_date("005930.KS") is None
+
+
+def test_first_price_date_returns_true_minimum_regardless_of_insert_order(repo):
+    from datetime import date
+
+    from stockscout.models import PriceBar
+
+    repo.save_price_bars(
+        [
+            PriceBar(ticker="005930.KS", date=date(2024, 1, 1), close=1.0),
+            PriceBar(ticker="005930.KS", date=date(2019, 3, 4), close=1.0),
+            PriceBar(ticker="005930.KS", date=date(2021, 9, 10), close=1.0),
+        ],
+        source="test",
+    )
+
+    assert repo.first_price_date("005930.KS") == date(2019, 3, 4)
+
+
+def test_first_price_date_ignores_any_read_window(repo):
+    """이 메서드는 구간 인자를 받지 않는다 — 그것이 핵심이다.
+
+    get_price_bars로 5년 창을 좁혀 읽으면 2015년의 봉은 그 목록에 아예
+    나타나지 않는다. first_price_date는 raw_prices 전체를 보므로 그
+    창과 무관하게 진짜 첫 봉을 돌려준다.
+    """
+    from datetime import date
+
+    from stockscout.models import PriceBar
+
+    repo.save_price_bars(
+        [
+            PriceBar(ticker="005930.KS", date=date(2015, 1, 1), close=1.0),
+            PriceBar(ticker="005930.KS", date=date(2026, 9, 10), close=1.0),
+        ],
+        source="test",
+    )
+
+    bounded = repo.get_price_bars(
+        "005930.KS", start=date(2021, 9, 10), end=date(2026, 9, 10)
+    )
+    assert all(b.date >= date(2021, 9, 10) for b in bounded)  # 2015년 봉은 안 보인다
+
+    assert repo.first_price_date("005930.KS") == date(2015, 1, 1)
+
+
+def test_first_price_date_is_scoped_to_ticker(repo):
+    from datetime import date
+
+    from stockscout.models import PriceBar
+
+    repo.save_price_bars(
+        [
+            PriceBar(ticker="005930.KS", date=date(2022, 1, 1), close=1.0),
+            PriceBar(ticker="000660.KS", date=date(2010, 1, 1), close=1.0),
+        ],
+        source="test",
+    )
+
+    assert repo.first_price_date("005930.KS") == date(2022, 1, 1)

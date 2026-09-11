@@ -199,17 +199,23 @@ def test_analyze_excludes_other_markets(repo):
 def test_analyze_price_window_excludes_stale_bars(repo):
     """price_years를 좁힌 뒤에도 옛 봉이 raw_prices에 그대로 남는다
     (Repository에 삭제 메서드가 없으므로). get_price_bars를 창으로
-    제한하지 않고 무경계로 읽으면:
+    제한하지 않고 무경계로 읽으면 창 밖 옛 봉이 평균에 섞여
+    avg_price_5y가 왜곡된다. 이 테스트는 그 한 가지 증상을 고정한다.
 
-    1) 창 밖 옛 봉이 평균에 섞여 avg_price_5y가 왜곡되고,
-    2) 창과 최근 데이터 사이에 공백이 있어도 그 옛 봉의 날짜가
-       min_history_years 이력 요건을 채워버려 INSUFFICIENT_HISTORY를
-       놓친다 (사실은 최근 창 안에 5년치 데이터가 없는데도).
+    이 테스트는 원래 두 번째 증상도 함께 확인했다: "창과 최근 데이터
+    사이에 공백이 있어도 그 옛 봉의 날짜가 min_history_years 이력
+    요건을 채워버려 진짜 이력 부족을 놓친다"는 것이었다. 그 증상은
+    이력 판정이 get_price_bars가 돌려준(구간으로 잘린) 봉 목록에서
+    min()을 구하던 옛 설계에서만 성립했다 — 그 목록엔 2010년 봉이
+    아예 없었으니, 공백이 있으면 안 걸릴 이유가 없었다.
 
-    이 테스트는 두 증상을 모두 확인한다. 특히 2)는 _earliest_window_start가
-    실제로 get_price_bars(start=..., end=...)에 전달되는지를 못박는다 —
-    compute_price_stats 자체가 창별로 날짜를 다시 거르기 때문에, 평균값
-    하나만으로는 무경계 조회 버그를 잡아내지 못한다.
+    지금은 반대다: 이력 판정은 Repository.first_price_date()로 조회
+    구간과 무관하게 진짜 첫 봉을 직접 구한다. 2010-01-01에 실제로 봉이
+    있다는 것은 이 종목이 진짜로 5년보다 오래됐다는 뜻이고, 그것은
+    버그가 아니라 사실이다. 평균 창과 이력 판정은 서로 다른 질문에
+    답한다 — 평균은 "최근 5년 안의 가격이 뭐였나", 이력은 "이 종목이
+    5년보다 오래됐는가". 평균 창 밖에 있다는 이유로 이력 판정까지
+    영향받으면 안 된다. 아래 두 번째 테스트가 이를 고정한다.
     """
     ticker = "GAP.KS"
     repo.upsert_security(Security(
@@ -223,7 +229,7 @@ def test_analyze_price_window_excludes_stale_bars(repo):
         source="pykrx",
     )
     # 옛 봉과 최근 구간 사이에 공백을 두고, 최근 구간은 5년에 못 미치는
-    # 2.3년치만 채운다 — 이력 요건 미달이 "정답"이다.
+    # 2.3년치만 채운다.
     d, recent = date(2024, 6, 1), []
     while d <= date(2026, 9, 10):
         recent.append(PriceBar(ticker=ticker, date=d, close=200.0))
@@ -234,7 +240,33 @@ def test_analyze_price_window_excludes_stale_bars(repo):
 
     row = repo.get_analysis_results(summary.snapshot_id)[0]
     assert row["avg_price_5y"] == pytest.approx(200.0)
-    assert "INSUFFICIENT_HISTORY" in json.loads(row["filter_failures"])
+
+
+def test_history_check_is_unaffected_by_gaps_outside_the_average_window(repo):
+    """위 테스트와 같은 데이터: 2010년에 봉 하나, 그 뒤 2024-06-01까지
+    공백, 그다음 2026-09-10까지 2.3년치. 5년 평균 창 밖에 있는 옛 봉도
+    이력 판정에는 그대로 반영돼야 한다 — 이 종목은 실제로 2010년부터
+    존재했다.
+    """
+    ticker = "GAP.KS"
+    repo.upsert_security(Security(
+        ticker=ticker, market="KR", name=ticker, exchange="KOSPI",
+        currency="KRW"))
+
+    repo.save_price_bars(
+        [PriceBar(ticker=ticker, date=date(2010, 1, 1), close=999.0)],
+        source="pykrx",
+    )
+    d, recent = date(2024, 6, 1), []
+    while d <= date(2026, 9, 10):
+        recent.append(PriceBar(ticker=ticker, date=d, close=200.0))
+        d += timedelta(days=1)
+    repo.save_price_bars(recent, source="pykrx")
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+
+    row = repo.get_analysis_results(summary.snapshot_id)[0]
+    assert "INSUFFICIENT_HISTORY" not in json.loads(row["filter_failures"])
 
 
 def test_analyzed_count_matches_persisted_rows(repo):
@@ -249,6 +281,101 @@ def test_analyzed_count_matches_persisted_rows(repo):
     rows = repo.get_analysis_results(summary.snapshot_id)
     assert summary.analyzed == len(rows)
     assert summary.analyzed == 3
+
+
+# --- 이력 필터 회귀: 조회 구간에서 이력을 다시 구하면 안 된다 -----------
+#
+# analyze.py는 평균 계산을 위해 주가를 5년 창으로 잘라 읽는다
+# (_earliest_window_start). 그 읽기 자체는 옳다 — Repository에 삭제
+# 메서드가 없어 옛 설정으로 저장된 봉이 raw_prices에 남기 때문이다.
+# 버그는 그 "잘린 목록"을 이력 필터에도 그대로 넘긴 데 있었다.
+# min_history_years=5(기본값)일 때 그 목록의 최솟값은 구성상 항상
+# 창의 시작일 이상이므로, 이력 판정이 "창 시작일에 정확히 거래일이
+# 있는가"로 퇴화한다. 5년을 뒤로 미는 시프트가 요일을 바꾸므로 이는
+# 동전 던지기가 된다.
+#
+# seed()가 아니라 seed_weekdays()를 쓰는 이유: seed()는 주말까지 매일
+# 봉을 채워서 "그 날짜에 봉이 없다"는 상황 자체가 재현되지 않는다.
+
+
+def seed_weekdays(repo, ticker="005930.KS", is_financial=False,
+                  first=date(2021, 9, 10), last=date(2026, 9, 10), close=100.0,
+                  market="KR", in_universe=True):
+    """실제 KRX 데이터처럼 평일에만 봉을 채운다."""
+    repo.upsert_security(Security(
+        ticker=ticker, market=market, name=ticker, exchange="KOSPI",
+        currency="KRW", is_financial=is_financial, in_universe=in_universe))
+    d, bars = first, []
+    while d <= last:
+        if d.weekday() < 5:
+            bars.append(PriceBar(ticker=ticker, date=d, close=close))
+        d += timedelta(days=1)
+    repo.save_price_bars(bars, source="pykrx")
+
+
+@pytest.mark.parametrize("as_of", [
+    date(2026, 9, 11),   # 금. 5년 전 2021-09-11 = 토요일
+    date(2026, 9, 18),   # 금. 5년 전 2021-09-18 = 토요일
+    date(2026, 9, 25),   # 금. 5년 전 2021-09-25 = 토요일
+    date(2026, 10, 2),   # 금. 5년 전 2021-10-02 = 토요일
+])
+def test_universe_survives_when_five_years_ago_is_not_a_trading_day(repo, as_of):
+    """as_of의 5년 전 날짜가 거래일이 아니어도(주말 등) 전 종목이
+    제외되면 안 된다. 실제 DB에서 42종목 전부가 탈락한 바로 그 시나리오.
+    """
+    seed_weekdays(repo, "005930.KS", first=date(2021, 9, 10), last=as_of)
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+
+    assert summary.excluded == 0
+    assert summary.passed == 1
+
+
+def test_first_bar_before_read_window_still_counts_toward_history(repo):
+    """진짜 첫 봉이 5년 조회 창보다 훨씬 이전이어도 이력으로 인정돼야
+    한다 — 이것이 빠져 있던 구성(composition) 테스트다.
+
+    get_price_bars가 5년 창으로 잘라 읽으므로, 2018년의 첫 봉은 그
+    목록에 아예 나타나지 않는다. 이력 판정이 그 목록에서 min()을 구하면
+    2018년 봉의 존재를 영영 알 수 없다.
+    """
+    seed_weekdays(repo, "005930.KS", first=date(2018, 1, 2), last=date(2026, 9, 11))
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+
+    assert summary.excluded == 0
+    assert summary.passed == 1
+
+
+def test_min_history_years_six_with_five_years_of_data_fails(repo):
+    """5년치 데이터만 있으면 6년 기준을 채울 수 없다 — 진짜 이력 부족."""
+    seed_weekdays(repo, "005930.KS", first=date(2021, 9, 10), last=date(2026, 9, 10))
+
+    summary = analyze_market(
+        repo, market="KR", config=cfg(hard_filters={"min_history_years": 6}),
+    )
+
+    row = repo.get_analysis_results(summary.snapshot_id)[0]
+    assert "INSUFFICIENT_HISTORY" in json.loads(row["filter_failures"])
+
+
+def test_min_history_years_six_with_seven_years_of_data_passes(repo):
+    """7년치 데이터가 실제로 있으면 6년 기준을 통과해야 한다.
+
+    읽기 구간은 max(price_years, 5)로 묶여 있으므로(그 자체는 옳다)
+    6~7년 전 봉은 get_price_bars가 돌려주는 목록에 없다. 이력 판정이
+    그 목록에서 min()을 구하는 한, DB에 실제로 7년치가 있어도 "6년
+    이상"을 절대 확인할 수 없다 — 현재 코드가 두 경우를 구분하지
+    못하는 지점이 바로 여기다.
+    """
+    seed_weekdays(repo, "005930.KS", first=date(2019, 9, 10), last=date(2026, 9, 10))
+
+    summary = analyze_market(
+        repo, market="KR", config=cfg(hard_filters={"min_history_years": 6}),
+    )
+
+    row = repo.get_analysis_results(summary.snapshot_id)[0]
+    assert "INSUFFICIENT_HISTORY" not in json.loads(row["filter_failures"])
 
 
 def test_high_5y_survives_narrowing_price_years(repo):

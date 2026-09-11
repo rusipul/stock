@@ -189,6 +189,17 @@ class Repository:
         ).fetchone()
         return date.fromisoformat(row["d"]) if row and row["d"] else None
 
+    def first_price_date(self, ticker: str) -> date | None:
+        """그 종목의 가장 이른 저장 봉. 이력 판정에 쓴다.
+
+        조회 구간과 무관해야 한다 — 구간으로 잘린 목록에서 첫 봉을 구하면
+        "구간 시작일이 거래일인가"를 묻는 것이 되어 판정이 무의미해진다.
+        """
+        row = self.conn.execute(
+            "SELECT MIN(date) AS d FROM raw_prices WHERE ticker = ?", (ticker,)
+        ).fetchone()
+        return date.fromisoformat(row["d"]) if row and row["d"] else None
+
     # --- 정규화 재무 -------------------------------------------------
 
     _FIN_COLUMNS = (

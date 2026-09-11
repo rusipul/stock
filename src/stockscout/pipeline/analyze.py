@@ -92,7 +92,9 @@ def analyze_market(
                 min_coverage=config.lookback.min_data_coverage,
             )
             outcome = apply_price_filters(
-                security, bars, as_of=as_of,
+                security,
+                repo.first_price_date(security.ticker),
+                as_of=as_of,
                 min_history_years=config.hard_filters.min_history_years,
             )
             financials = repo.get_financials(security.ticker)
