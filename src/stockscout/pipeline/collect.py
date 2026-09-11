@@ -6,9 +6,15 @@ from datetime import date
 
 from pydantic import BaseModel
 
-from stockscout.sources.base import FundamentalSource, PriceSource
+from stockscout.sources.base import FatalSourceError, FundamentalSource, PriceSource
 from stockscout.sources.ratelimit import DailyQuotaExceeded
 from stockscout.store.repository import Repository
+
+# 배치를 통째로 멈추는 예외. DailyQuotaExceeded(일일 한도 소진)와
+# FatalSourceError(등록되지 않은 키 등, 남은 모든 종목이 똑같이 실패할 오류)
+# 둘 다 "이 종목만 격리하고 계속 진행"이 아니라 "원인 하나만 보고하고 중단"이
+# 맞다 — 아래에서 같은 분기로 묶어 처리한다.
+ABORTING_ERRORS = (DailyQuotaExceeded, FatalSourceError)
 
 
 class CollectSummary(BaseModel):
@@ -25,6 +31,7 @@ class CollectSummary(BaseModel):
     statements: int = 0
     price_bars: int = 0
     aborted: bool = False
+    abort_reason: str | None = None
     remaining: list[str] = []
 
     def render(self) -> str:
@@ -33,8 +40,11 @@ class CollectSummary(BaseModel):
             f"재무제표 {self.statements}건 · 주가 {self.price_bars}봉 저장",
         ]
         if self.aborted:
+            # 중단 사유는 늘 일일 한도 소진이 아니다 (예: 등록되지 않은 API
+            # 키). abort_reason이 없으면(방어적 기본값) 그렇게만 말한다.
+            reason = self.abort_reason or "알 수 없는 이유"
             lines.append(
-                f"[중단] 일일 한도 소진. 남은 종목 {len(self.remaining)}개: "
+                f"[중단] {reason}. 남은 종목 {len(self.remaining)}개: "
                 f"{', '.join(self.remaining[:5])}"
                 + (" …" if len(self.remaining) > 5 else "")
             )
@@ -73,7 +83,12 @@ def collect_market(
 ) -> CollectSummary:
     """한 시장의 재무·주가를 수집한다.
 
-    한 종목의 실패는 그 종목에만 머문다(설계서 §13). 일일 한도 소진만이 배치를 멈춘다.
+    한 종목의 실패는 그 종목에만 머문다(설계서 §13). 배치를 멈추는 것은
+    ABORTING_ERRORS뿐이다 — 일일 한도 소진(DailyQuotaExceeded)과, 남은
+    모든 종목이 똑같이 실패할 치명적 오류(FatalSourceError, 예: 등록되지
+    않은 DART API 키)다. 둘 다 "이 종목만"이 아니라 "무엇을 시도해도
+    똑같다"는 신호라서, 종목 단위로 격리해봐야 같은 오류를 반복 기록할
+    뿐이다.
     """
     targets = [
         s for s in repo.list_securities(market=market)
@@ -90,8 +105,9 @@ def collect_market(
             summary.statements += _collect_statements(
                 repo, ticker, fundamentals, years, force
             )
-        except DailyQuotaExceeded as exc:
+        except ABORTING_ERRORS as exc:
             repo.record_error(ticker, fundamentals.name, str(exc))
+            summary.abort_reason = str(exc)
             aborted = True
         except Exception as exc:  # 종목 단위 격리 (설계서 §13)
             repo.record_error(ticker, fundamentals.name, f"{type(exc).__name__}: {exc}")
@@ -106,8 +122,9 @@ def collect_market(
                 summary.price_bars += _collect_prices(
                     repo, ticker, prices, price_start, price_end
                 )
-            except DailyQuotaExceeded as exc:
+            except ABORTING_ERRORS as exc:
                 repo.record_error(ticker, prices.name, str(exc))
+                summary.abort_reason = str(exc)
                 aborted = True
             except Exception as exc:  # 종목 단위 격리 (설계서 §13)
                 repo.record_error(ticker, prices.name, f"{type(exc).__name__}: {exc}")

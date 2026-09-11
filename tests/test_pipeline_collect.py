@@ -4,7 +4,7 @@ import pytest
 
 from stockscout.models import PriceBar, RawStatement, Security
 from stockscout.pipeline.collect import CollectSummary, collect_market, sync_universe
-from stockscout.sources.base import PermanentSourceError
+from stockscout.sources.base import FatalSourceError, PermanentSourceError
 from stockscout.sources.ratelimit import DailyQuotaExceeded
 from stockscout.store.db import connect, init_db
 from stockscout.store.repository import Repository
@@ -354,6 +354,108 @@ def test_collect_price_quota_exceeded_aborts_batch_including_current_ticker(repo
     assert summary.remaining == ["005930.KS", "035420.KS"]
 
 
+def test_collect_fatal_source_error_aborts_batch_including_current_ticker(repo):
+    """FatalSourceError(예: DART 인증키 미등록)는 이 종목만의 문제가 아니라
+    요청 자체의 문제라서 나머지 종목도 정확히 같은 이유로 전부 실패한다.
+    DailyQuotaExceeded와 같은 방식으로 배치를 멈추고, 아직 수집이 끝나지
+    않은 현재 종목부터 remaining에 포함해야 한다."""
+    # list_securities()는 ticker 알파벳순: 000660 < 005930 < 035420.
+    repo.upsert_security(sec("005930.KS"))
+    repo.upsert_security(sec("000660.KS", "SK하이닉스"))
+    repo.upsert_security(sec("035420.KS", "NAVER"))
+    bad_key = FatalSourceError(
+        "DART 인증키가 등록되지 않았습니다. config/.env 의 DART_API_KEY 를 확인하세요 "
+        "(발급: https://opendart.fss.or.kr)"
+    )
+    fundamentals = FakeFundamentals(failures={"005930.KS": bad_key})
+
+    summary = collect_market(
+        repo, "KR", fundamentals, FakePrices(),
+        years=[2025], price_start=date(2021, 1, 1), price_end=date(2026, 1, 31),
+    )
+
+    assert summary.aborted is True
+    assert [t for t, _ in fundamentals.requested] == ["000660.KS", "005930.KS"]
+    assert summary.remaining == ["005930.KS", "035420.KS"]
+
+
+def test_collect_fatal_source_error_stops_remaining_tickers_from_being_requested(repo):
+    """치명적 오류로 중단되면 남은 종목은 재무제표는 물론 가격조차
+    요청되지 않아야 한다 — 42개 종목이 전부 실패할 걸 알면서도 계속
+    호출을 시도할 이유가 없다."""
+    repo.upsert_security(sec("000660.KS", "SK하이닉스"))
+    repo.upsert_security(sec("005930.KS"))
+    fundamentals = FakeFundamentals(
+        failures={"000660.KS": FatalSourceError("DART 인증키가 등록되지 않았습니다")}
+    )
+    prices = FakePrices()
+
+    collect_market(
+        repo, "KR", fundamentals, prices,
+        years=[2025], price_start=date(2021, 1, 1), price_end=date(2026, 1, 31),
+    )
+
+    assert prices.requested == []  # 000660에서 이미 중단됐으므로 가격도 요청되지 않는다
+
+
+def test_collect_fatal_source_error_from_price_source_also_aborts_batch(repo):
+    """치명적 오류는 재무제표 소스뿐 아니라 가격 소스에서 나도 동일하게
+    배치를 멈춰야 한다 — DailyQuotaExceeded가 두 하위 단계 모두에서
+    같은 방식으로 처리되는 것과 대칭이다."""
+    repo.upsert_security(sec("005930.KS"))
+    repo.upsert_security(sec("000660.KS", "SK하이닉스"))
+    prices = FakePrices(failures={"000660.KS": FatalSourceError("가격 소스 치명적 오류")})
+
+    summary = collect_market(
+        repo, "KR", FakeFundamentals(), prices,
+        years=[], price_start=date(2021, 1, 1), price_end=date(2026, 1, 31),
+    )
+
+    assert summary.aborted is True
+    assert summary.remaining == ["000660.KS", "005930.KS"]
+
+
+def test_collect_daily_quota_exceeded_sets_abort_reason(repo):
+    """render()가 실제 중단 사유를 보여주려면 collect_market이 그 사유를
+    summary에 남겨야 한다. 한도 소진 경로도 예외는 아니다."""
+    repo.upsert_security(sec("005930.KS"))
+    fundamentals = FakeFundamentals(
+        failures={"005930.KS": DailyQuotaExceeded("일일 한도 20000건 소진 (사용 20000건)")}
+    )
+
+    summary = collect_market(
+        repo, "KR", fundamentals, FakePrices(),
+        years=[2025], price_start=date(2021, 1, 1), price_end=date(2026, 1, 31),
+    )
+
+    assert summary.abort_reason is not None
+    assert "한도" in summary.abort_reason
+
+
+def test_collect_fatal_source_error_sets_abort_reason_to_the_actual_message(repo):
+    """중단 사유는 하드코딩된 "일일 한도 소진"이 아니라, 실제로 배치를
+    멈추게 한 예외 메시지를 그대로 담아야 한다 — 원인이 잘못된 키일 때
+    한도 소진이라고 말하면 운영자가 엉뚱한 곳을 고친다."""
+    repo.upsert_security(sec("005930.KS"))
+    message = (
+        "DART 인증키가 등록되지 않았습니다. config/.env 의 DART_API_KEY 를 확인하세요 "
+        "(발급: https://opendart.fss.or.kr)"
+    )
+    fundamentals = FakeFundamentals(failures={"005930.KS": FatalSourceError(message)})
+
+    summary = collect_market(
+        repo, "KR", fundamentals, FakePrices(),
+        years=[2025], price_start=date(2021, 1, 1), price_end=date(2026, 1, 31),
+    )
+
+    assert summary.abort_reason == message
+    text = summary.render()
+    text.encode("cp949")  # 크래시하지 않아야 한다 (콘솔이 cp949)
+    assert "DART_API_KEY" in text
+    assert "config/.env" in text
+    assert "일일 한도 소진" not in text
+
+
 def test_collect_force_refetches_everything(repo):
     repo.upsert_security(sec())
     repo.save_raw_statements([
@@ -423,6 +525,22 @@ def test_summary_render_is_printable_on_cp949_console():
     )
 
     summary.render().encode("cp949")  # 예외가 나면 실패
+
+
+def test_summary_render_uses_abort_reason_when_set():
+    """중단 사유가 한도 소진이 아닐 수도 있으므로(예: 잘못된 API 키),
+    render()는 하드코딩된 "일일 한도 소진"이 아니라 abort_reason을
+    그대로 보여줘야 한다."""
+    summary = CollectSummary(
+        total=3, succeeded=0, aborted=True, remaining=["A", "B"],
+        abort_reason="DART 인증키가 등록되지 않았습니다. config/.env 의 DART_API_KEY 를 확인하세요",
+    )
+
+    text = summary.render()
+
+    text.encode("cp949")
+    assert "DART_API_KEY" in text
+    assert "일일 한도 소진" not in text
 
 
 def test_summary_render_names_remaining_tickers_when_aborted():
