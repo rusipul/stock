@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 from typing import Literal
 
@@ -17,7 +18,14 @@ from fastapi.staticfiles import StaticFiles
 
 from stockscout.store.db import DEFAULT_DB_PATH, connect
 from stockscout.store.repository import Repository
-from stockscout.web.schemas import FinancialRow, SecurityDetail, SecurityRow, SnapshotInfo
+from stockscout.web.schemas import (
+    FinancialRow,
+    PricePoint,
+    PriceSeries,
+    SecurityDetail,
+    SecurityRow,
+    SnapshotInfo,
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -186,12 +194,75 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
 
         return read(build)
 
+    @app.get("/api/securities/{ticker}/prices", response_model=PriceSeries)
+    def get_prices(
+        ticker: str,
+        years: int = 5,
+    ) -> PriceSeries:
+        # Literal[1, 3, 5]을 파라미터 타입에 그대로 쓰면 이 FastAPI/pydantic
+        # 조합(0.141.1 / 2.13.5)에서 쿼리스트링 "1"이 int 리터럴 1로
+        # 캐스팅되지 않고 항상 422가 난다 — pydantic-core가 문자열
+        # 검증 모드에서 int Literal을 원본 문자열과 그대로 비교하기
+        # 때문이다(1도 3도 5도 전부 거부됨). int로 받고 여기서 직접
+        # 검사해 실제로 원하는 동작(1·3·5는 통과, 그 외는 422)을 낸다.
+        if years not in (1, 3, 5):
+            raise HTTPException(
+                status_code=422, detail="years 는 1, 3, 5 중 하나여야 합니다.")
+
+        def build(repo: Repository) -> PriceSeries:
+            snap = repo.get_latest_snapshot()
+            if snap is None:
+                raise HTTPException(status_code=404, detail="분석 결과가 없습니다.")
+            row = next(
+                (r for r in repo.get_analysis_results(snap.snapshot_id)
+                 if r["ticker"] == ticker),
+                None,
+            )
+            if row is None:
+                raise HTTPException(
+                    status_code=404, detail=f"{ticker} 는 최신 스냅샷에 없습니다.")
+
+            as_of = date.fromisoformat(snap.as_of) if snap.as_of else None
+            start = _window_start(as_of, years) if as_of else None
+            bars = repo.get_price_bars(ticker, start=start, end=as_of)
+            if not bars:
+                raise HTTPException(
+                    status_code=404, detail=f"{ticker} 의 주가 데이터가 없습니다.")
+
+            return PriceSeries(
+                ticker=ticker,
+                as_of=snap.as_of,
+                series=[PricePoint(date=b.date.isoformat(), close=b.close)
+                        for b in bars],
+                price_current=row["price_current"],
+                avg_price_1y=row["avg_price_1y"],
+                avg_price_3y=row["avg_price_3y"],
+                avg_price_5y=row["avg_price_5y"],
+                high_5y=row["high_5y"],
+            )
+
+        return read(build)
+
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
+
+
+def _window_start(as_of: date, years: int) -> date:
+    """as_of로부터 years년 전. 달력 기준이다.
+
+    analysis.valuation.window_start와 같은 계산이지만 여기서 다시 쓴다.
+    web/은 analysis/를 import하지 않는다 — 웹은 계산 계층이 아니라
+    저장된 것을 보여주는 계층이고, 이 함수는 차트 구간을 자르기 위한
+    표시용 계산이지 판정에 쓰이는 값이 아니다.
+    """
+    try:
+        return as_of.replace(year=as_of.year - years)
+    except ValueError:  # 2월 29일
+        return as_of.replace(year=as_of.year - years, day=28)
 
 
 def _rationale(row: dict, failures: list[str]) -> list[str]:

@@ -89,3 +89,25 @@ class SecurityDetail(SecurityRow):
     rationale: list[str]
     score_detail: str | None
     financials: list[FinancialRow]
+
+
+class PricePoint(BaseModel):
+    date: str
+    close: float
+
+
+class PriceSeries(BaseModel):
+    """차트 한 장에 필요한 전부.
+
+    기준선(평균·고점)은 스냅샷에서 그대로 가져온다. 프론트가 다시
+    계산하면 창 정의나 반올림이 갈려 화면과 판정 근거가 어긋난다.
+    """
+
+    ticker: str
+    as_of: str | None
+    series: list[PricePoint]
+    price_current: float
+    avg_price_1y: float | None
+    avg_price_3y: float | None
+    avg_price_5y: float | None
+    high_5y: float
