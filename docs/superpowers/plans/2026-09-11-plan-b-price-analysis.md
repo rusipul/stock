@@ -491,6 +491,10 @@ from datetime import date
 
 from stockscout.models import PriceBar, PriceStats
 
+# 고점 창은 설계서 §9.1이 5년으로 못박은 값이다. 창별 평균(1·3·5년)과
+# 달리 설정으로 바뀌지 않으므로 상수로 둔다.
+HIGH_WINDOW_YEARS = 5
+
 
 def window_start(as_of: date, years: int) -> date:
     """as_of로부터 years년 전 날짜. 달력 기준이다.
@@ -525,10 +529,19 @@ def compute_price_stats(
     if not bars:
         raise ValueError("주가 데이터가 없습니다")
 
-    ordered = sorted(bars, key=lambda b: b.date)
+    # as_of 이후 봉은 전부 버린다. 이 함수는 "as_of 시점에 무엇이 보였는가"를
+    # 답해야 한다. 현재가와 고점만 상한 없이 계산하면, 과거 시점을 물었을 때
+    # 미래 가격이 섞여 들어온다(look-ahead bias). 파이프라인이 늘 최신
+    # 날짜를 넘기므로 지금은 결과가 같지만, 그 호출 습관에 정확성을
+    # 의존시키면 안 된다 — 백테스트나 "그때는 뭐라고 했나" 조회가
+    # 조용히 낙관적인 답을 받게 되고 에러는 나지 않는다.
+    ordered = [b for b in sorted(bars, key=lambda b: b.date) if b.date <= as_of]
+    if not ordered:
+        raise ValueError(f"주가 데이터가 {as_of} 이전에 없습니다")
+
     price_current = ordered[-1].close
 
-    five_year_start = window_start(as_of, 5)
+    five_year_start = window_start(as_of, HIGH_WINDOW_YEARS)
     in_five = [b for b in ordered if b.date >= five_year_start]
     high_5y = max(b.close for b in (in_five or ordered))
 
@@ -591,7 +604,8 @@ print('  5년고점', f'{s.high_5y:,.0f}', ' 고점대비', f'{s.drop_vs_high*10
 "
 ```
 
-Expected: 현재가 269,000 / 5년평균 약 92,000 / 평균대비 약 +190% / 고점대비 약 -28%
+Expected: 현재가 269,000 / 5년평균 91,988 / 평균대비 +192.4% / 고점대비 -25.8%
+(5년 고점은 2026-06-18의 362,500이다)
 
 **평균 대비가 양수인 것이 정상이다.** 강세장이라 5년 평균이 현재가보다 한참 낮다. 이 도구가 찾는 종목은 반대 방향이다.
 
@@ -1666,8 +1680,13 @@ def _earliest_window_start(as_of: date, windows: list[int]) -> date:
     Repository에 삭제 메서드가 없어 raw_prices는 append/upsert만 된다.
     price_years를 줄이면 옛 봉이 남아 있으므로, 무인자로 읽으면 설정을
     바꿔도 옛 데이터가 평균에 섞인다.
+
+    HIGH_WINDOW_YEARS를 함께 고려하는 이유: 고점 창은 설계서 §9.1이
+    5년으로 못박은 값이라 price_years와 무관하다. price_years를
+    [1, 3]으로 좁히면 조회 구간이 3년이 되어, 3년 고점이 "5년 고점"으로
+    조용히 보고되고 그 값이 계획 C의 고점 대비 등급 판정에 들어간다.
     """
-    return window_start(as_of, max(windows))
+    return window_start(as_of, max(max(windows), HIGH_WINDOW_YEARS))
 ```
 
 - [ ] **Step 4: `latest_price_date_any`를 Repository에 추가한다**

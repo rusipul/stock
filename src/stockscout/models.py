@@ -143,3 +143,86 @@ class Financials(BaseModel):
         if self.operating_cash_flow is None or self.capex is None:
             return None
         return self.operating_cash_flow - abs(self.capex)
+
+
+# --- 분석 계층 (설계서 §8·§9) ---------------------------------------
+
+
+class FilterOutcome(BaseModel):
+    """하드필터 판정 결과. 실패 사유를 모두 모은다 (설계서 §8.1).
+
+    첫 실패에서 멈추지 않는 이유: 화면에서 "왜 제외됐나"를 보여줄 때
+    사유가 하나만 있으면 고치고 다시 돌렸을 때 또 다른 사유로 걸린다.
+    """
+
+    failures: list[str] = []
+
+    @property
+    def passed(self) -> bool:
+        return not self.failures
+
+
+class PriceStats(BaseModel):
+    """가격 통계 (설계서 §9.1).
+
+    avg_price·drop_vs_avg는 창(년) → 값 매핑이다. 커버리지가 미달한
+    창은 None이며 등급 판정에서 제외된다.
+    """
+
+    price_current: float
+    avg_price: dict[int, float | None]
+    high_5y: float
+    drop_vs_avg: dict[int, float | None]
+    drop_vs_high: float
+
+
+class Valuation(BaseModel):
+    """밸류에이션 지표 (설계서 §9.2). 화면 표시·정렬 전용, 점수에 넣지 않는다.
+
+    shares_outstanding이 없으면 셋 다 None이다. DART의 전체 재무제표
+    API가 발행주식수를 주지 않으므로 당분간 항상 None이다.
+    """
+
+    market_cap: float | None = None
+    per: float | None = None
+    pbr: float | None = None
+
+
+class Snapshot(BaseModel):
+    """분석 1회 실행의 메타데이터 (설계서 §6)."""
+
+    snapshot_id: int | None = None   # 저장 시 부여된다
+    run_at: str
+    as_of: str | None = None         # 이 스냅샷이 고정한 가격 기준일(ISO 날짜).
+                                      # run_at과 달리 실행 시각이 아니라 그
+                                      # 실행이 "무엇을 기준으로" 계산했는지를
+                                      # 말한다. 기존 스냅샷·직접 조립한
+                                      # Snapshot과의 호환을 위해 선택값이다.
+    config_hash: str
+    config_json: str
+    note: str | None = None
+
+
+class AnalysisResult(BaseModel):
+    """한 종목의 분석 결과 한 줄.
+
+    점수·등급 칸은 계획 C가 채운다. 그때까지 None이다.
+    """
+
+    ticker: str
+    filters: FilterOutcome
+    stats: PriceStats
+    valuation: Valuation
+
+    score_total: float | None = None
+    score_profit: float | None = None
+    score_growth: float | None = None
+    score_stability: float | None = None
+    score_cashflow: float | None = None
+    score_detail: str | None = None
+    signal_grade: str | None = None
+    signal_reason: str | None = None
+
+    @property
+    def passed_filters(self) -> bool:
+        return self.filters.passed

@@ -3,7 +3,14 @@ from datetime import date
 import pytest
 
 from stockscout.cli import build_parser, build_universe, fiscal_years, main, price_window
-from stockscout.models import Security
+from stockscout.models import (
+    AnalysisResult,
+    FilterOutcome,
+    PriceStats,
+    Security,
+    Snapshot,
+    Valuation,
+)
 from stockscout.sources.krx import KrxUniverse
 from stockscout.sources.universe import YamlUniverse
 from stockscout.store.db import connect, init_db
@@ -297,3 +304,160 @@ def test_main_collect_normalizes_plain_kr_ticker_before_dispatch(tmp_path, monke
 
     assert exit_code == 0
     assert captured["tickers"] == ["005930.KS"]
+
+
+# --- analyze 명령 -----------------------------------------------------
+
+
+def test_parser_analyze_command():
+    args = build_parser().parse_args(["analyze"])
+
+    assert args.command == "analyze"
+    assert args.market == "KR"
+    assert args.note is None
+    assert args.top == 20
+
+
+def test_parser_analyze_accepts_note_and_top():
+    args = build_parser().parse_args(
+        ["analyze", "--note", "임계치 실험", "--top", "5"])
+
+    assert args.note == "임계치 실험"
+    assert args.top == 5
+
+
+def test_main_analyze_on_empty_db_returns_zero(tmp_path, capsys):
+    from stockscout.cli import main
+
+    code = main(["--db", str(tmp_path / "t.db"), "--config",
+                 "config/settings.yaml", "analyze"])
+
+    assert code == 0
+    assert "0종목 분석" in capsys.readouterr().out
+
+
+# --- analyze 명령: 순위표 출력 ------------------------------------------
+#
+# render_ranking()을 파이프라인 전체를 돌리지 않고 검증하기 위해,
+# Repository.save_snapshot()으로 직접 스냅샷을 만든다. AnalysisResult를
+# 손으로 조립해 넣는다.
+
+
+def _analysis_result(
+    ticker: str,
+    passed: bool = True,
+    drop_vs_avg_5y: float = -0.1,
+    price_current: float = 100.0,
+    avg_price_5y: float = 150.0,
+    drop_vs_high: float = -0.2,
+) -> AnalysisResult:
+    return AnalysisResult(
+        ticker=ticker,
+        filters=FilterOutcome(failures=[] if passed else ["FINANCIAL_SECTOR"]),
+        stats=PriceStats(
+            price_current=price_current,
+            avg_price={1: avg_price_5y, 3: avg_price_5y, 5: avg_price_5y},
+            high_5y=avg_price_5y * 1.5,
+            drop_vs_avg={1: drop_vs_avg_5y, 3: drop_vs_avg_5y, 5: drop_vs_avg_5y},
+            drop_vs_high=drop_vs_high,
+        ),
+        valuation=Valuation(),
+    )
+
+
+def _save_snapshot(repo: Repository, results: list[AnalysisResult]) -> int:
+    snapshot = Snapshot(
+        run_at="2026-01-01T00:00:00+00:00", config_hash="deadbeef",
+        config_json="{}", note=None,
+    )
+    return repo.save_snapshot(snapshot, results)
+
+
+def test_render_ranking_excludes_filter_failing_stocks(repo):
+    from stockscout.cli import render_ranking
+
+    repo.upsert_security(Security(ticker="AAA", market="KR", name="AAA전자", currency="KRW"))
+    repo.upsert_security(Security(ticker="BBB", market="KR", name="BBB은행", currency="KRW"))
+
+    snapshot_id = _save_snapshot(repo, [
+        _analysis_result("AAA", passed=True, drop_vs_avg_5y=-0.3),
+        _analysis_result("BBB", passed=False, drop_vs_avg_5y=-0.9),
+    ])
+
+    output = render_ranking(repo, snapshot_id, top=20, window=5)
+
+    assert "AAA전자" in output
+    assert "BBB은행" not in output
+
+
+def test_render_ranking_sorts_ascending_by_drop_rate(repo):
+    """가장 많이 떨어진 종목이 맨 위로 온다 (drop_vs_avg는 음수이므로 오름차순 정렬)."""
+    from stockscout.cli import render_ranking
+
+    repo.upsert_security(Security(ticker="AAA", market="KR", name="가종목", currency="KRW"))
+    repo.upsert_security(Security(ticker="BBB", market="KR", name="나종목", currency="KRW"))
+    repo.upsert_security(Security(ticker="CCC", market="KR", name="다종목", currency="KRW"))
+
+    snapshot_id = _save_snapshot(repo, [
+        _analysis_result("AAA", drop_vs_avg_5y=-0.1),
+        _analysis_result("BBB", drop_vs_avg_5y=-0.5),
+        _analysis_result("CCC", drop_vs_avg_5y=-0.3),
+    ])
+
+    output = render_ranking(repo, snapshot_id, top=20, window=5)
+
+    # -0.5(나종목) -> -0.3(다종목) -> -0.1(가종목) 순으로 나와야 한다.
+    positions = [output.index(name) for name in ("나종목", "다종목", "가종목")]
+    assert positions == sorted(positions)
+
+
+def test_render_ranking_reports_no_passing_stocks(repo):
+    from stockscout.cli import render_ranking
+
+    repo.upsert_security(Security(ticker="AAA", market="KR", name="AAA전자", currency="KRW"))
+
+    snapshot_id = _save_snapshot(repo, [
+        _analysis_result("AAA", passed=False),
+    ])
+
+    output = render_ranking(repo, snapshot_id, top=20, window=5)
+
+    assert "(통과 종목 없음)" in output
+
+
+def test_render_ranking_respects_top(repo):
+    from stockscout.cli import render_ranking
+
+    results = []
+    for i in range(5):
+        ticker = f"T{i}"
+        repo.upsert_security(
+            Security(ticker=ticker, market="KR", name=f"종목{i}", currency="KRW")
+        )
+        results.append(_analysis_result(ticker, drop_vs_avg_5y=-0.1 * (i + 1)))
+
+    snapshot_id = _save_snapshot(repo, results)
+
+    output = render_ranking(repo, snapshot_id, top=2, window=5)
+
+    data_lines = output.splitlines()[2:]  # 머리글 줄과 구분선(---) 다음부터
+    assert len(data_lines) == 2
+
+
+def test_main_analyze_top_zero_suppresses_ranking_table(tmp_path, monkeypatch, capsys):
+    """--top 0 이면 요약과 스냅샷 저장은 그대로 하되 순위표는 찍지 않는다."""
+    from stockscout.pipeline.analyze import AnalyzeSummary
+
+    def fake_analyze_market(repo, market, config, note=None):
+        return AnalyzeSummary(snapshot_id=1, analyzed=1, passed=1, excluded=0)
+
+    monkeypatch.setattr("stockscout.cli.analyze_market", fake_analyze_market)
+
+    exit_code = main([
+        "--db", str(tmp_path / "t.db"), "--config", "config/settings.yaml",
+        "analyze", "--top", "0",
+    ])
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert out == "1종목 분석 · 통과 1 · 제외 0\n스냅샷 #1 저장\n"

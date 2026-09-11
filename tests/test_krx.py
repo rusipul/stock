@@ -61,6 +61,40 @@ def test_universe_returns_securities_with_ticker_and_name():
     assert secs[0].exchange == "KOSPI"
 
 
+# --- 결함 3: 수정주가는 상류 기본값이 아니라 명시적으로 요구한다 ----------
+#
+# 설계서 §9.1은 수정주가를 필수로 요구한다 — 2018년 삼성전자 50:1
+# 액면분할처럼, 수정 없는 종가로 5년 평균을 구하면 분할 이전 가격이
+# 그대로 섞여 하락률이 통째로 틀어진다. pyproject.toml이 pykrx를
+# 상한 없이(>=1.0.45) 고정하고 있어, 상류가 adjusted의 기본값을
+# 뒤집으면 이 스크리너의 존재 이유가 조용히 깨진다.
+#
+# KrxPriceSource.fetch_daily에 주입하는 ohlcv_fn으로는 이걸 검증할 수
+# 없다 — adjusted=True는 _default_ohlcv_fn 내부에서 고정하는 것이지
+# fetch_daily가 호출부에서 넘기는 인자가 아니다. 그래서 pykrx.stock의
+# 실제 함수를 몽키패치해 _default_ohlcv_fn을 직접 호출한다.
+
+
+def test_default_ohlcv_fn_requests_adjusted_prices(monkeypatch):
+    import pykrx.stock as pykrx_stock
+
+    from stockscout.sources.krx import _default_ohlcv_fn
+
+    captured = {}
+
+    def fake_get_market_ohlcv(fromdate, todate, ticker, **kwargs):
+        captured["args"] = (fromdate, todate, ticker)
+        captured["kwargs"] = kwargs
+        return pd.DataFrame()
+
+    monkeypatch.setattr(pykrx_stock, "get_market_ohlcv", fake_get_market_ohlcv)
+
+    _default_ohlcv_fn("20260101", "20260131", "005930")
+
+    assert captured["args"] == ("20260101", "20260131", "005930")
+    assert captured["kwargs"].get("adjusted") is True
+
+
 def test_universe_skips_tickers_whose_name_lookup_fails():
     def flaky_name(code):
         if code == "BAD":

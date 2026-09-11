@@ -8,6 +8,7 @@ import sys
 from datetime import date, timedelta
 
 from stockscout.config import DEFAULT_CONFIG_PATH, load_config, load_secrets
+from stockscout.pipeline.analyze import analyze_market
 from stockscout.pipeline.collect import collect_market, sync_universe
 from stockscout.pipeline.normalize import normalize_market
 from stockscout.sources.dart import DartSource
@@ -133,6 +134,29 @@ def resolve_tickers(
     return tickers
 
 
+def render_ranking(repo, snapshot_id: int, top: int, window: int) -> str:
+    """하락률 상위 종목표. ASCII 기호만 쓴다 (콘솔이 cp949다)."""
+    rows = [r for r in repo.get_analysis_results(snapshot_id)
+            if r["passed_filters"] and r[f"drop_vs_avg_{window}y"] is not None]
+    rows.sort(key=lambda r: r[f"drop_vs_avg_{window}y"])
+
+    names = {s.ticker: s.name for s in repo.list_securities()}
+    lines = [f"{'종목':<18}{'현재가':>12}{f'{window}년평균':>12}"
+             f"{'평균대비':>10}{'고점대비':>10}",
+             "-" * 62]
+    for r in rows[:top]:
+        lines.append(
+            f"{names.get(r['ticker'], r['ticker']):<18}"
+            f"{r['price_current']:>12,.0f}"
+            f"{r[f'avg_price_{window}y']:>12,.0f}"
+            f"{r[f'drop_vs_avg_{window}y'] * 100:>9.1f}%"
+            f"{r['drop_vs_high'] * 100:>9.1f}%"
+        )
+    if not rows:
+        lines.append("(통과 종목 없음)")
+    return "\n".join(lines)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="stockscout", description="한국·미국 우량주 낙폭 스크리너"
@@ -159,6 +183,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_norm = sub.add_parser("normalize", help="원본을 공통 스키마로 변환한다")
     p_norm.add_argument("--market", default="KR", choices=["KR", "US"])
+
+    p_ana = sub.add_parser("analyze", help="저장된 데이터로 하락률을 계산한다")
+    p_ana.add_argument("--market", default="KR", choices=["KR", "US"])
+    p_ana.add_argument("--note", default=None, help="스냅샷에 남길 메모")
+    p_ana.add_argument("--top", type=int, default=20,
+                       help="하락률 상위 몇 종목을 출력할지")
 
     return parser
 
@@ -202,6 +232,15 @@ def main(argv: list[str] | None = None) -> int:
 
         elif args.command == "normalize":
             print(normalize_market(repo, market=args.market).render())
+
+        elif args.command == "analyze":
+            summary = analyze_market(repo, market=args.market, config=config,
+                                     note=args.note)
+            print(summary.render())
+            if summary.snapshot_id is not None and args.top > 0:
+                print()
+                print(render_ranking(repo, summary.snapshot_id, args.top,
+                                     config.lookback.primary_window))
 
     return 0
 
