@@ -147,27 +147,178 @@ async function toggleWatch(row) {
   renderList();
 }
 
-// 지금은 종목명과 한 줄 요약만 보여준다. 우측 상세 리포트(차트,
-// 재무 표, 판정 근거)는 별도로 채운다.
-function selectTicker(ticker) {
+// --- 우측 상세 패널 --------------------------------------------------
+
+const DART_GUIDE = `<div class="empty-state">
+  <b>재무 데이터가 없습니다</b>
+  DART 공시에서 재무제표를 수집하면 우량주 점수와 재무 추이가 여기에
+  표시됩니다. 지금은 주가 기준 하락률만 계산됩니다.
+  <pre>1. https://opendart.fss.or.kr 에서 인증키 발급
+2. config/.env 의 DART_API_KEY= 뒤에 붙여넣기
+3. stockscout collect --market KR
+   stockscout normalize --market KR
+   stockscout analyze --market KR</pre>
+</div>`;
+
+async function selectTicker(ticker) {
   state.selected = ticker;
   renderList();
-
   const panel = $("detail-panel");
-  const row = state.rows.find((r) => r.ticker === ticker);
-  if (!row) {
-    panel.innerHTML = '<p class="placeholder">왼쪽에서 종목을 선택하세요.</p>';
-    return;
+  panel.innerHTML = `<p class="placeholder">불러오는 중…</p>`;
+  try {
+    const [detail, prices] = await Promise.all([
+      getJSON(`/api/securities/${encodeURIComponent(ticker)}`),
+      getJSON(`/api/securities/${encodeURIComponent(ticker)}/prices`),
+    ]);
+    renderDetail(detail, prices);
+  } catch (err) {
+    panel.innerHTML = `<p class="placeholder">${err.message}</p>`;
+  }
+}
+
+function renderDetail(d, prices) {
+  const panel = $("detail-panel");
+  panel.innerHTML = "";
+
+  // 헤더
+  const header = document.createElement("div");
+  header.className = "detail-header";
+  header.innerHTML = `
+    <h2>${escapeHtml(d.name)}</h2>
+    <span class="code">${escapeHtml(d.ticker)} · ${escapeHtml(d.exchange ?? "")}</span>
+    <span class="badge ${d.passed_filters ? "pass" : "fail"}">
+      ${d.passed_filters ? "통과" : "제외"}
+    </span>
+    <span style="flex:1"></span>
+    <span class="star" id="detail-star">${d.in_watchlist ? "★" : "☆"}</span>`;
+  panel.appendChild(header);
+  header.querySelector("#detail-star").onclick = async () => {
+    const row = state.rows.find((r) => r.ticker === d.ticker);
+    if (row) { await toggleWatch(row); d.in_watchlist = row.in_watchlist; }
+    header.querySelector("#detail-star").textContent = d.in_watchlist ? "★" : "☆";
+  };
+
+  // 차트
+  const box = document.createElement("div");
+  box.id = "chart-box";
+  box.innerHTML = `<canvas id="price-chart"></canvas>`;
+  panel.appendChild(box);
+
+  // KPI
+  const kpis = document.createElement("div");
+  kpis.className = "kpis";
+  kpis.innerHTML = [
+    kpi(won(d.price_current), "현재가"),
+    kpi(pct(d.drop_vs_avg_5y), "5년평균 대비", signClass(d.drop_vs_avg_5y)),
+    kpi(pct(d.drop_vs_high), "5년고점 대비", signClass(d.drop_vs_high)),
+    d.score_total === null
+      ? kpi("—", "우량주 점수", "", true)
+      : kpi(d.score_total.toFixed(0), "우량주 점수"),
+  ].join("");
+  panel.appendChild(kpis);
+
+  // 판정 근거
+  panel.appendChild(sectionTitle("판정 근거"));
+  const rat = document.createElement("div");
+  rat.className = "rationale";
+  rat.innerHTML = d.rationale.map((line) => `<div>${escapeHtml(line)}</div>`).join("");
+  panel.appendChild(rat);
+
+  // 재무 추이
+  panel.appendChild(sectionTitle("재무 추이"));
+  if (!d.financials.length) {
+    const box2 = document.createElement("div");
+    box2.innerHTML = DART_GUIDE;
+    panel.appendChild(box2);
+  } else {
+    panel.appendChild(financialsTable(d.financials));
   }
 
-  panel.innerHTML = "";
-  const h2 = document.createElement("h2");
-  h2.textContent = `${row.name} (${row.ticker})`;
-  const summary = document.createElement("p");
-  summary.className = "muted";
-  summary.textContent =
-    `현재가 ${won(row.price_current)}원 · 5년 평균 대비 ${pct(row.drop_vs_avg_5y)}`;
-  panel.append(h2, summary);
+  drawChart(prices);
+}
+
+function kpi(value, label, cls = "", empty = false) {
+  return `<div class="kpi${empty ? " empty" : ""}">
+    <b class="${cls}">${value}</b><span>${label}</span></div>`;
+}
+
+function sectionTitle(text) {
+  const el = document.createElement("div");
+  el.className = "section-title";
+  el.textContent = text;
+  return el;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+function financialsTable(rows) {
+  const table = document.createElement("table");
+  table.className = "fin";
+  const years = rows.map((r) => r.fiscal_year);
+  const line = (label, pick) =>
+    `<tr><td>${label}</td>` + rows.map((r) => `<td>${pick(r)}</td>`).join("") + "</tr>";
+
+  table.innerHTML =
+    `<tr><th>항목</th>${years.map((y) => `<th>${y}</th>`).join("")}</tr>` +
+    line("매출", (r) => won(r.revenue)) +
+    line("영업이익", (r) => won(r.operating_income)) +
+    line("영업이익률", (r) => pct(r.operating_margin)) +
+    line("ROE", (r) => pct(r.roe)) +
+    line("부채비율", (r) => r.debt_ratio === null ? "—" : r.debt_ratio.toFixed(1) + "%") +
+    line("영업현금흐름", (r) => won(r.operating_cash_flow));
+  return table;
+}
+
+function drawChart(p) {
+  if (state.chart) state.chart.destroy();
+
+  // 기준선은 서버가 준 값을 그대로 쓴다. 여기서 다시 평균을 내면
+  // 창 정의나 반올림이 갈려 차트와 판정 근거가 어긋난다.
+  const refs = [
+    ["5년 고점", p.high_5y, "#e53e3e"],
+    ["5년 평균", p.avg_price_5y, "#805ad5"],
+    ["3년 평균", p.avg_price_3y, "#38a169"],
+    ["1년 평균", p.avg_price_1y, "#dd6b20"],
+  ].filter(([, v]) => v !== null && v !== undefined);
+
+  const labels = p.series.map((x) => x.date);
+  const datasets = [{
+    label: "종가",
+    data: p.series.map((x) => x.close),
+    borderColor: "#2b6cb0",
+    borderWidth: 1.4,
+    pointRadius: 0,
+    tension: 0,
+  }];
+  for (const [label, value, color] of refs) {
+    datasets.push({
+      label: `${label} ${won(value)}`,
+      data: labels.map(() => value),
+      borderColor: color,
+      borderWidth: 1,
+      borderDash: [5, 4],
+      pointRadius: 0,
+    });
+  }
+
+  state.chart = new Chart($("price-chart"), {
+    type: "line",
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { maxTicksLimit: 8, font: { size: 10 } }, grid: { display: false } },
+        y: { ticks: { font: { size: 10 }, callback: (v) => won(v) } },
+      },
+    },
+  });
 }
 
 // --- 초기화 ----------------------------------------------------------
