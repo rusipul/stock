@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 
 from pydantic import BaseModel
 
@@ -83,22 +83,45 @@ def collect_market(
 
     for i, security in enumerate(targets):
         ticker = security.ticker
+        aborted = False
+        ticker_failed = False
+
         try:
             summary.statements += _collect_statements(
                 repo, ticker, fundamentals, years, force
             )
-            summary.price_bars += _collect_prices(
-                repo, ticker, prices, price_start, price_end, force
-            )
-            summary.succeeded += 1
         except DailyQuotaExceeded as exc:
             repo.record_error(ticker, fundamentals.name, str(exc))
+            aborted = True
+        except Exception as exc:  # 종목 단위 격리 (설계서 §13)
+            repo.record_error(ticker, fundamentals.name, f"{type(exc).__name__}: {exc}")
+            ticker_failed = True
+
+        # 재무제표 수집과 별개의 try. DART(fundamentals)가 실패해도
+        # pykrx(prices)는 독립 소스이므로 계속 시도해야 한다 — 그렇지 않으면
+        # "corp_code를 찾을 수 없습니다" 같은 정상적으로 발생하는 DART 실패가
+        # 매 실행마다 여러 종목의 주가 5년치를 통째로 날려버린다 (설계서 §13, 결함 C2).
+        if not aborted:
+            try:
+                summary.price_bars += _collect_prices(
+                    repo, ticker, prices, price_start, price_end
+                )
+            except DailyQuotaExceeded as exc:
+                repo.record_error(ticker, prices.name, str(exc))
+                aborted = True
+            except Exception as exc:  # 종목 단위 격리 (설계서 §13)
+                repo.record_error(ticker, prices.name, f"{type(exc).__name__}: {exc}")
+                ticker_failed = True
+
+        if aborted:
             summary.aborted = True
             summary.remaining = [s.ticker for s in targets[i:]]
             break
-        except Exception as exc:  # 종목 단위 격리
-            repo.record_error(ticker, fundamentals.name, f"{type(exc).__name__}: {exc}")
+
+        if ticker_failed:
             summary.failed += 1
+        else:
+            summary.succeeded += 1
 
     return summary
 
@@ -131,17 +154,36 @@ def _collect_prices(
     source: PriceSource,
     start: date,
     end: date,
-    force: bool,
 ) -> int:
-    fetch_from = start
-    if not force:
-        latest = repo.latest_price_date(ticker)
-        if latest:
-            fetch_from = latest + timedelta(days=1)
-    if fetch_from > end:
+    """[start, end] 전체 구간을 매번 다시 요청한다. 절대로 재무제표처럼
+    증분(고수위선) 수집으로 "최적화"하지 말 것 — 다음 사람에게 남기는 메모.
+
+    DART(재무제표)와 달리 pykrx(주가)는 회계연도별로 호출을 나누지 않는다.
+    구간 전체를 호출 한 번으로 반환하므로, latest_price_date() 이후만
+    요청하는 증분 수집은 네트워크 호출을 단 한 건도 절약하지 못한다.
+    절약 없이 대가만 있다:
+
+    1. pykrx는 "수정종가"를 반환한다. 액면분할 등 기업 행위가 일어나면
+       과거 전체 구간이 새 기준으로 재계산되어 나온다. 이미 저장된
+       구간을 건너뛰면, 분할 이전 구간은 옛 기준에 남고 이후 구간만
+       새 기준이 되어 한 시계열에 두 조정 기준이 섞인다(설계서 §5.3
+       결함 C1). 예: 저장된 [100000×5, 20000×5] → 현재가 20,000,
+       평균 60,000으로 계산되어 하락률이 -66.7%로 조작된다.
+    2. settings.yaml의 price_years를 넓혀(예: [1,3] → [1,3,5]) 더 이른
+       price_start로 재수집해도, 고수위선은 이미 최신이라 아무것도
+       재요청되지 않아 avg_price_5y가 영구히 3년치로만 계산된다.
+
+    save_price_bars()가 (ticker, date) upsert이므로 전체 재요청은
+    멱등하다 — 재실행 때마다 저장된 구간이 "현재" 조정 기준으로
+    다시 맞춰진다는 뜻이라 오히려 바람직하다.
+
+    latest_price_date()는 여기서 쓰지 않을 뿐 Repository에는 남겨둔다.
+    데이터 최신성 조회 등 다른 용도로 여전히 유효하다.
+    """
+    if start > end:
         return 0
 
-    bars = source.fetch_daily(ticker, fetch_from, end)
+    bars = source.fetch_daily(ticker, start, end)
     if bars:
         repo.save_price_bars(bars, source=source.name)
     return len(bars)
