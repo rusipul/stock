@@ -3,14 +3,42 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from datetime import date, datetime, timezone
 
-from stockscout.models import Financials, PriceBar, RawStatement, Security
+from stockscout.models import (
+    AnalysisResult,
+    Financials,
+    PriceBar,
+    RawStatement,
+    Security,
+    Snapshot,
+)
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def json_safe(value):
+    """JSON으로 직렬화할 수 없는 float를 None으로 바꾼다.
+
+    json.dumps(float('inf'))는 표준 JSON이 아닌 Infinity 토큰을 내보내고
+    JSON.parse가 이를 거부한다. 계획 C의 interest_coverage가 무차입
+    기업에 대해 inf를 반환하므로(설계서 §8.2의 만점 조건), 그 값이
+    score_detail에 들어가면 웹 화면이 통째로 깨진다.
+
+    직렬화 경계에서 한 번만 처리한다. 계산 쪽은 inf를 그대로 쓴다 —
+    "이자 부담 없음"과 "데이터 없음"은 다른 상태이기 때문이다.
+    """
+    if isinstance(value, float):
+        return None if math.isinf(value) or math.isnan(value) else value
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    return value
 
 
 class Repository:
@@ -205,6 +233,108 @@ class Repository:
             for field in json.loads(row["missing_fields"] or "[]"):
                 counts[field] = counts.get(field, 0) + 1
         return counts
+
+    # --- 스냅샷 -------------------------------------------------------
+
+    def save_snapshot(self, snapshot: Snapshot, results: list[AnalysisResult]) -> int:
+        """스냅샷과 결과를 한 트랜잭션으로 쓴다. 실패하면 아무것도 남지 않는다.
+
+        설계서 §13이 "배치 중 예외 → 스냅샷을 커밋하지 않는다. 직전
+        스냅샷이 유지되므로 화면은 계속 동작한다"를 요구한다.
+
+        범용 transaction() 컨텍스트 매니저를 만들지 않는 이유: SQLite는
+        중첩 트랜잭션을 지원하지 않으므로, 안쪽 메서드가 commit()을 부르는
+        한 바깥 트랜잭션까지 함께 커밋돼 원자성이 깨진다. 스냅샷 쓰기는
+        개념적으로 한 번의 연산이므로 전용 메서드로 둔다.
+        """
+        try:
+            cur = self.conn.execute(
+                "INSERT INTO snapshots (run_at, config_hash, config_json, note) "
+                "VALUES (?, ?, ?, ?)",
+                (snapshot.run_at, snapshot.config_hash, snapshot.config_json,
+                 snapshot.note),
+            )
+            snapshot_id = cur.lastrowid
+
+            self.conn.executemany(
+                """
+                INSERT INTO analysis_results (
+                    snapshot_id, ticker, passed_filters, filter_failures,
+                    score_total, score_profit, score_growth, score_stability,
+                    score_cashflow, score_detail,
+                    price_current, avg_price_1y, avg_price_3y, avg_price_5y,
+                    high_5y, drop_vs_avg_1y, drop_vs_avg_3y, drop_vs_avg_5y,
+                    drop_vs_high, market_cap, per, pbr,
+                    signal_grade, signal_reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                          ?, ?, ?, ?, ?, ?)
+                """,
+                [self._result_row(snapshot_id, r) for r in results],
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        return snapshot_id
+
+    @staticmethod
+    def _result_row(snapshot_id: int, r: AnalysisResult) -> tuple:
+        s = r.stats
+        return (
+            snapshot_id, r.ticker, int(r.passed_filters),
+            json.dumps(r.filters.failures, ensure_ascii=False),
+            r.score_total, r.score_profit, r.score_growth, r.score_stability,
+            r.score_cashflow, r.score_detail,
+            s.price_current, s.avg_price.get(1), s.avg_price.get(3),
+            s.avg_price.get(5), s.high_5y,
+            s.drop_vs_avg.get(1), s.drop_vs_avg.get(3), s.drop_vs_avg.get(5),
+            s.drop_vs_high,
+            r.valuation.market_cap, r.valuation.per, r.valuation.pbr,
+            r.signal_grade, r.signal_reason,
+        )
+
+    def get_latest_snapshot(self) -> Snapshot | None:
+        row = self.conn.execute(
+            "SELECT * FROM snapshots ORDER BY snapshot_id DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        return Snapshot(
+            snapshot_id=row["snapshot_id"], run_at=row["run_at"],
+            config_hash=row["config_hash"], config_json=row["config_json"],
+            note=row["note"],
+        )
+
+    def get_analysis_results(self, snapshot_id: int) -> list[dict]:
+        """스냅샷의 결과를 원본 행 그대로 반환한다.
+
+        AnalysisResult로 되돌리지 않는 이유: 읽는 쪽(요약 출력, 나중의
+        웹 API)이 컬럼을 그대로 쓰는 편이 단순하고, 창 매핑을 다시
+        조립할 이유가 없다.
+        """
+        rows = self.conn.execute(
+            "SELECT * FROM analysis_results WHERE snapshot_id = ? ORDER BY ticker",
+            (snapshot_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def trading_dates(self, start: date, end: date) -> list[date]:
+        """수집된 전 종목의 날짜 합집합. 거래소 달력 대신 쓴다.
+
+        별도 거래일 달력을 두지 않는 이유: 이미 수집한 데이터가 곧
+        관측된 거래일이고, 휴장일 정의를 따로 관리하면 소스와 어긋난다.
+        """
+        rows = self.conn.execute(
+            "SELECT DISTINCT date FROM raw_prices WHERE date BETWEEN ? AND ? "
+            "ORDER BY date",
+            (start.isoformat(), end.isoformat()),
+        ).fetchall()
+        return [date.fromisoformat(r["date"]) for r in rows]
+
+    def latest_price_date_any(self) -> date | None:
+        """전 종목 통틀어 가장 최근 거래일. 분석 기준일이 된다."""
+        row = self.conn.execute("SELECT MAX(date) AS d FROM raw_prices").fetchone()
+        return date.fromisoformat(row["d"]) if row and row["d"] else None
 
     # --- 오류 기록 ---------------------------------------------------
 
