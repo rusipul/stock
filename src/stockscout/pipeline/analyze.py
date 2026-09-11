@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from stockscout.analysis.filters import apply_price_filters
 from stockscout.analysis.valuation import (
+    HIGH_WINDOW_YEARS,
     compute_price_stats,
     compute_valuation,
     window_start,
@@ -131,5 +132,10 @@ def _earliest_window_start(as_of: date, windows: list[int]) -> date:
     Repository에 삭제 메서드가 없어 raw_prices는 append/upsert만 된다.
     price_years를 줄이면 옛 봉이 남아 있으므로, 무인자로 읽으면 설정을
     바꿔도 옛 데이터가 평균에 섞인다.
+
+    HIGH_WINDOW_YEARS를 함께 고려하는 이유: 고점 창은 설계서 §9.1이
+    5년으로 못박은 값이라 price_years와 무관하다. price_years를
+    [1, 3]으로 좁히면 조회 구간이 3년이 되어, 3년 고점이 "5년 고점"으로
+    조용히 보고되고 그 값이 계획 C의 고점 대비 등급 판정에 들어간다.
     """
-    return window_start(as_of, max(windows))
+    return window_start(as_of, max(max(windows), HIGH_WINDOW_YEARS))

@@ -249,3 +249,36 @@ def test_analyzed_count_matches_persisted_rows(repo):
     rows = repo.get_analysis_results(summary.snapshot_id)
     assert summary.analyzed == len(rows)
     assert summary.analyzed == 3
+
+
+def test_high_5y_survives_narrowing_price_years(repo):
+    """price_years에서 5를 빼도 고점 창은 5년이어야 한다.
+
+    고점 창은 설계서 §9.1이 5년으로 못박은 값이라 price_years와
+    무관하다. 조회 구간을 max(price_years)로만 잡으면 price_years가
+    [1, 3]일 때 3년치만 읽혀, 3년 고점이 "5년 고점"으로 조용히
+    보고되고 그 값이 계획 C의 고점 대비 등급 판정에 들어간다.
+    """
+    repo.upsert_security(Security(ticker="PEAK.KS", market="KR", name="PEAK.KS",
+                                  exchange="KOSPI", currency="KRW"))
+    # 4년 전에 고점(500), 최근 3년은 평탄(100). 고점은 3년 창 밖, 5년 창 안이다.
+    bars, d, last = [], date(2021, 9, 10), date(2026, 9, 10)
+    peak_day = date(2022, 9, 10)
+    while d <= last:
+        bars.append(PriceBar(ticker="PEAK.KS", date=d,
+                             close=500.0 if d == peak_day else 100.0))
+        d += timedelta(days=1)
+    repo.save_price_bars(bars, source="pykrx")
+
+    narrow = Config.model_validate({
+        "lookback": {"price_years": [1, 3], "primary_window": 3,
+                     "min_data_coverage": 0.8},
+        "hard_filters": {"min_history_years": 5},
+    })
+
+    summary = analyze_market(repo, market="KR", config=narrow)
+    row = repo.get_analysis_results(summary.snapshot_id)[0]
+
+    assert row["high_5y"] == 500.0          # 3년 창 밖의 고점을 놓치지 않는다
+    assert row["avg_price_5y"] is None      # 5년 평균은 요청되지 않았다
+    assert row["avg_price_3y"] is not None

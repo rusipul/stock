@@ -491,6 +491,10 @@ from datetime import date
 
 from stockscout.models import PriceBar, PriceStats
 
+# 고점 창은 설계서 §9.1이 5년으로 못박은 값이다. 창별 평균(1·3·5년)과
+# 달리 설정으로 바뀌지 않으므로 상수로 둔다.
+HIGH_WINDOW_YEARS = 5
+
 
 def window_start(as_of: date, years: int) -> date:
     """as_of로부터 years년 전 날짜. 달력 기준이다.
@@ -537,7 +541,7 @@ def compute_price_stats(
 
     price_current = ordered[-1].close
 
-    five_year_start = window_start(as_of, 5)
+    five_year_start = window_start(as_of, HIGH_WINDOW_YEARS)
     in_five = [b for b in ordered if b.date >= five_year_start]
     high_5y = max(b.close for b in (in_five or ordered))
 
@@ -1676,8 +1680,13 @@ def _earliest_window_start(as_of: date, windows: list[int]) -> date:
     Repository에 삭제 메서드가 없어 raw_prices는 append/upsert만 된다.
     price_years를 줄이면 옛 봉이 남아 있으므로, 무인자로 읽으면 설정을
     바꿔도 옛 데이터가 평균에 섞인다.
+
+    HIGH_WINDOW_YEARS를 함께 고려하는 이유: 고점 창은 설계서 §9.1이
+    5년으로 못박은 값이라 price_years와 무관하다. price_years를
+    [1, 3]으로 좁히면 조회 구간이 3년이 되어, 3년 고점이 "5년 고점"으로
+    조용히 보고되고 그 값이 계획 C의 고점 대비 등급 판정에 들어간다.
     """
-    return window_start(as_of, max(windows))
+    return window_start(as_of, max(max(windows), HIGH_WINDOW_YEARS))
 ```
 
 - [ ] **Step 4: `latest_price_date_any`를 Repository에 추가한다**
