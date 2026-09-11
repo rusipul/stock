@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from stockscout.store.db import DEFAULT_DB_PATH, connect
 from stockscout.store.repository import Repository
-from stockscout.web.schemas import SecurityRow, SnapshotInfo
+from stockscout.web.schemas import FinancialRow, SecurityDetail, SecurityRow, SnapshotInfo
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -126,9 +126,109 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
 
         return read(build)
 
+    @app.get("/api/securities/{ticker}", response_model=SecurityDetail)
+    def get_security(ticker: str) -> SecurityDetail:
+        def build(repo: Repository) -> SecurityDetail:
+            snap = repo.get_latest_snapshot()
+            if snap is None:
+                raise HTTPException(status_code=404, detail="분석 결과가 없습니다.")
+            row = next(
+                (r for r in repo.get_analysis_results(snap.snapshot_id)
+                 if r["ticker"] == ticker),
+                None,
+            )
+            if row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"{ticker} 는 최신 스냅샷에 없습니다.",
+                )
+            master = repo.get_security(ticker)
+            failures = json.loads(row["filter_failures"] or "[]")
+
+            return SecurityDetail(
+                ticker=ticker,
+                name=master.name if master else ticker,
+                exchange=master.exchange if master else None,
+                is_financial=bool(master.is_financial) if master else False,
+                currency=master.currency if master else "KRW",
+                passed_filters=bool(row["passed_filters"]),
+                filter_failures=failures,
+                price_current=row["price_current"],
+                avg_price_1y=row["avg_price_1y"],
+                avg_price_3y=row["avg_price_3y"],
+                avg_price_5y=row["avg_price_5y"],
+                high_5y=row["high_5y"],
+                drop_vs_avg_1y=row["drop_vs_avg_1y"],
+                drop_vs_avg_3y=row["drop_vs_avg_3y"],
+                drop_vs_avg_5y=row["drop_vs_avg_5y"],
+                drop_vs_high=row["drop_vs_high"],
+                score_total=row["score_total"],
+                market_cap=row["market_cap"],
+                per=row["per"],
+                pbr=row["pbr"],
+                in_watchlist=ticker in repo.watchlist_tickers(),
+                rationale=_rationale(row, failures),
+                score_detail=row["score_detail"],
+                financials=[
+                    FinancialRow(
+                        fiscal_year=f.fiscal_year,
+                        revenue=f.revenue,
+                        operating_income=f.operating_income,
+                        net_income=f.net_income,
+                        operating_margin=f.operating_margin,
+                        roe=f.roe,
+                        debt_ratio=f.debt_ratio,
+                        operating_cash_flow=f.operating_cash_flow,
+                    )
+                    for f in repo.get_financials(ticker)
+                ],
+            )
+
+        return read(build)
+
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
+
+
+def _rationale(row: dict, failures: list[str]) -> list[str]:
+    """판정 근거를 실제 숫자가 담긴 문장으로 만든다 (설계서 §11.2).
+
+    점수만 던지는 화면은 실제 투자 판단에 쓸 수 없다. 계산식을 그대로
+    보여줘야 사용자가 검증할 수 있다.
+
+    기호를 쓰지 않는다. 이 문자열은 웹으로 가지만 CLI로도 갈 수 있고,
+    한국어 Windows 콘솔은 cp949라 체크표시 같은 문자를 출력하면 죽는다.
+    """
+    lines: list[str] = []
+
+    if failures:
+        lines.append(f"[제외] 하드필터 {len(failures)}건에 걸렸습니다: "
+                     + ", ".join(failures))
+    else:
+        lines.append("[통과] 가격 기반 하드필터를 모두 통과했습니다 "
+                     "(금융업 아님, 5년 이력 충족)")
+
+    for years in (1, 3, 5):
+        avg = row[f"avg_price_{years}y"]
+        drop = row[f"drop_vs_avg_{years}y"]
+        if avg is None or drop is None:
+            lines.append(f"{years}년 평균 대비: 데이터 커버리지 미달로 계산하지 않음")
+            continue
+        lines.append(
+            f"{years}년 평균 대비  {row['price_current']:,.0f}"
+            f" / {avg:,.0f} - 1 = {drop * 100:.1f}%"
+        )
+
+    lines.append(
+        f"5년 고점 대비  {row['price_current']:,.0f}"
+        f" / {row['high_5y']:,.0f} - 1 = {row['drop_vs_high'] * 100:.1f}%"
+    )
+
+    if row["score_total"] is None:
+        lines.append("우량주 점수: 재무 데이터가 없어 계산되지 않았습니다")
+
+    return lines

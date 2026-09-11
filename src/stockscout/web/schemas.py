@@ -63,3 +63,29 @@ class SecurityRow(BaseModel):
     pbr: float | None
 
     in_watchlist: bool
+
+
+class FinancialRow(BaseModel):
+    """재무 추이 한 해. 파생 지표는 서버에서 계산해 내려보낸다.
+
+    Financials 모델이 이미 이 계산을 갖고 있으므로 프론트에서 다시
+    구현하지 않는다 — 같은 공식이 두 곳에 있으면 갈라진다.
+    """
+
+    fiscal_year: int
+    revenue: float | None
+    operating_income: float | None
+    net_income: float | None
+    operating_margin: float | None
+    roe: float | None
+    debt_ratio: float | None
+    operating_cash_flow: float | None
+
+
+class SecurityDetail(SecurityRow):
+    """우측 패널. 목록 한 줄에 상세 정보를 더한다."""
+
+    currency: str
+    rationale: list[str]
+    score_detail: str | None
+    financials: list[FinancialRow]
