@@ -137,16 +137,46 @@ def resolve_tickers(
 def serve(db_path: str, host: str, port: int) -> None:
     """개발용 서버를 띄운다.
 
+    소켓은 uvicorn에 맡기지 않고 여기서 먼저 연다. uvicorn.run에 맡기면
+    바인드가 실패해도 그 앞에서 찍은 "실행 중입니다"가 화면에 남아,
+    서버가 떠 있다고 믿게 된다. 포트가 점유돼 있으면 아무것도 출력하지
+    않고 바로 끝나야 한다.
+
     uvicorn과 web 모듈을 함수 안에서 import한다. 다른 하위명령은
     FastAPI가 필요 없으므로, 최상단에서 import하면 collect 한 번
     돌리는 데도 웹 스택 전체가 로드된다.
     """
+    import socket
+
+    # uvicorn은 SO_REUSEADDR을 켜고 바인드한다. 윈도우에서 그 옵션은
+    # "이미 쓰는 주소에도 붙어라"는 뜻이라, 남의 서버 위에 얹히고도
+    # 성공한 척할 수 있다. 여기서는 켜지 않는다.
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        sock.bind((host, port))
+        sock.listen(2048)
+    except OSError as exc:
+        sock.close()
+        raise SystemExit(
+            f"{host}:{port} 를 열 수 없습니다 ({exc.strerror or exc}). "
+            f"다른 포트를 --port 로 지정하세요."
+        ) from exc
+
     import uvicorn
 
     from stockscout.web.api import create_app
 
-    print(f"http://{host}:{port} 에서 실행 중입니다. 종료하려면 Ctrl+C.")
-    uvicorn.run(create_app(db_path), host=host, port=port, log_level="warning")
+    try:
+        app = create_app(db_path)
+    except BaseException:
+        sock.close()
+        raise
+
+    # flush: 파이프로 넘기면 블록 버퍼링이라, 서버가 도는 내내 이 줄이
+    # 버퍼에 갇혀 있다가 종료할 때 나온다. 주소는 지금 보여야 한다.
+    print(f"http://{host}:{port} 에서 실행 중입니다. 종료하려면 Ctrl+C.", flush=True)
+    uvicorn.Server(uvicorn.Config(app, log_level="warning")).run(sockets=[sock])
 
 
 def render_ranking(repo, snapshot_id: int, top: int, window: int) -> str:

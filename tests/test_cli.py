@@ -2,7 +2,14 @@ from datetime import date
 
 import pytest
 
-from stockscout.cli import build_parser, build_universe, fiscal_years, main, price_window
+from stockscout.cli import (
+    build_parser,
+    build_universe,
+    fiscal_years,
+    main,
+    price_window,
+    serve,
+)
 from stockscout.models import (
     AnalysisResult,
     FilterOutcome,
@@ -476,3 +483,28 @@ def test_parser_serve_accepts_host_and_port():
 
     assert args.host == "0.0.0.0"
     assert args.port == 9000
+
+
+def test_serve_does_not_claim_success_when_the_port_is_taken(tmp_path, capsys):
+    """바인드 실패인데 '실행 중입니다'를 찍으면 사용자에게 거짓말이 된다.
+
+    실제로 겪은 일이다. 포트가 점유된 상태로 serve를 띄웠더니 성공
+    메시지가 먼저 나오고 그 뒤에 uvicorn이 죽었다. 브라우저를 열어보기
+    전까지는 서버가 떠 있다고 믿게 된다.
+    """
+    import socket
+
+    occupied = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    occupied.bind(("127.0.0.1", 0))
+    occupied.listen(1)
+    port = occupied.getsockname()[1]
+
+    try:
+        with pytest.raises(SystemExit) as exc:
+            serve(str(tmp_path / "absent.db"), host="127.0.0.1", port=port)
+    finally:
+        occupied.close()
+
+    out = capsys.readouterr().out
+    assert "실행 중입니다" not in out
+    assert str(port) in str(exc.value)
