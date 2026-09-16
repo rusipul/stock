@@ -1,8 +1,7 @@
 """하드필터. 설계서 §8.1.
 
-걸리면 점수를 계산하지 않고 제외한다. 이 계획은 재무제표 없이 판정
-가능한 두 가지만 구현한다. 재무 기반 필터(자본잠식·연속적자·과다부채·
-이자미충당·매출급감·필수항목결측)는 계획 C가 더한다.
+걸리면 점수를 계산하지 않고 제외한다. 가격·업종 기반 판정은
+apply_price_filters가, 재무제표 기반 판정은 apply_financial_filters가 한다.
 
 순수 함수다. 네트워크도 DB도 모른다.
 """
@@ -12,10 +11,22 @@ from __future__ import annotations
 from datetime import date
 
 from stockscout.analysis.valuation import window_start
-from stockscout.models import FilterOutcome, Security
+from stockscout.config import HardFilterConfig
+from stockscout.models import FilterOutcome, Financials, Security, is_adverse_opinion
 
 FINANCIAL_SECTOR = "FINANCIAL_SECTOR"
 INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"
+CAPITAL_IMPAIRED = "CAPITAL_IMPAIRED"
+CONSECUTIVE_LOSS = "CONSECUTIVE_LOSS"
+HIGH_DEBT = "HIGH_DEBT"
+INTEREST_UNCOVERED = "INTEREST_UNCOVERED"
+REVENUE_COLLAPSE = "REVENUE_COLLAPSE"
+DATA_INSUFFICIENT = "DATA_INSUFFICIENT"
+ADVERSE_AUDIT_OPINION = "ADVERSE_AUDIT_OPINION"
+
+# 매출 급감을 재는 간격. revenue[최근] 대 revenue[3년전]이므로 목록에서
+# 4개 연도가 필요하다 (설계서 §8.1).
+REVENUE_LOOKBACK_YEARS = 3
 
 
 def apply_price_filters(
@@ -58,5 +69,87 @@ def apply_price_filters(
     required_start = window_start(as_of, min_history_years)
     if first_bar_date is None or first_bar_date > required_start:
         failures.append(INSUFFICIENT_HISTORY)
+
+    return FilterOutcome(failures=failures)
+
+
+def apply_financial_filters(
+    financials: list[Financials], config: HardFilterConfig
+) -> FilterOutcome:
+    """재무제표 기반 하드필터를 적용한다. 설계서 §8.1.
+
+    첫 실패에서 멈추지 않고 모든 사유를 모은다 — apply_price_filters와
+    같은 이유다.
+
+    "모르는 것으로 떨어뜨리지 않는다"가 이 함수 전체를 관통하는 규칙이다.
+    이자비용이 NULL이면 이자보상배율 필터를 건너뛰고, 감사의견이 NULL이면
+    감사의견 필터를 건너뛴다. 계정과목 매핑 실패가 사업 부실로 둔갑하면
+    안 된다. 결측 자체는 DATA_INSUFFICIENT가 필수 4항목에 대해서만 잡는다.
+    """
+    failures: list[str] = []
+
+    # Repository는 연도 오름차순으로 주지만 그것에 기대지 않는다.
+    years = sorted(financials, key=lambda f: f.fiscal_year)
+
+    if len(years) < config.min_history_years:
+        failures.append(INSUFFICIENT_HISTORY)
+
+    if not years or not years[-1].has_required:
+        failures.append(DATA_INSUFFICIENT)
+
+    if not years:
+        return FilterOutcome(failures=failures)
+
+    latest = years[-1]
+
+    if latest.total_equity is not None and latest.total_equity <= 0:
+        failures.append(CAPITAL_IMPAIRED)
+
+    loss_window = years[-config.consecutive_operating_loss_years:]
+    if (
+        len(loss_window) == config.consecutive_operating_loss_years
+        and all(
+            f.operating_income is not None and f.operating_income < 0
+            for f in loss_window
+        )
+    ):
+        failures.append(CONSECUTIVE_LOSS)
+
+    # debt_ratio는 자본이 0 이하면 None이다. 그 경우는 CAPITAL_IMPAIRED가
+    # 이미 잡았으므로 여기서 또 떨어뜨리지 않는다.
+    if latest.debt_ratio is not None and latest.debt_ratio > config.max_debt_ratio:
+        failures.append(HIGH_DEBT)
+
+    # 창의 모든 해에서 이자보상배율을 실제로 구할 수 있을 때만 판정한다.
+    # 한 해라도 빠지면 len 검사에서 걸려 필터 자체를 건너뛴다 — 무차입이었던
+    # 해가 섞여 있다고 해서 나머지 한 해의 부진으로 떨어뜨리지 않는다.
+    #
+    # 두 조건은 겹친다. interest_coverage가 interest_expense=None일 때 이미
+    # None을 주고, 0일 때 주는 inf는 아래 all(c < 임계치)를 항상 False로
+    # 만들기 때문이다(변이 테스트로 확인: 앞 조건만 떼면 통과하는 테스트가
+    # 없다). 그래도 남겨 둔다 — 뒤 조건까지 함께 떼면 coverages에 None이
+    # 섞여 아래 비교가 TypeError로 죽는다. 이 줄은 "모르는 것으로
+    # 떨어뜨리지 않는다"를 지키는 지점이므로 정리 대상이 아니다.
+    coverage_window = years[-config.interest_coverage_years:]
+    coverages = [
+        f.interest_coverage
+        for f in coverage_window
+        if f.interest_expense not in (None, 0) and f.interest_coverage is not None
+    ]
+    if (
+        len(coverages) == config.interest_coverage_years
+        and all(c < config.min_interest_coverage for c in coverages)
+    ):
+        failures.append(INTEREST_UNCOVERED)
+
+    if len(years) > REVENUE_LOOKBACK_YEARS:
+        base = years[-1 - REVENUE_LOOKBACK_YEARS].revenue
+        now = latest.revenue
+        if base is not None and base > 0 and now is not None:
+            if now / base - 1 <= config.max_revenue_decline_3y:
+                failures.append(REVENUE_COLLAPSE)
+
+    if is_adverse_opinion(latest.audit_opinion):
+        failures.append(ADVERSE_AUDIT_OPINION)
 
     return FilterOutcome(failures=failures)
