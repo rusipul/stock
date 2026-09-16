@@ -36,7 +36,18 @@ def test_snapshot_matches_cli_counts(snapshot):
     assert snapshot["excluded"] == 8
 
 
-def test_scores_are_absent_until_dart_key(snapshot):
+def test_scores_are_absent_until_plan_c(snapshot):
+    """인증키는 들어왔지만 점수는 아직 없다 — 이유가 바뀌었다.
+
+    이름이 `..._until_dart_key`였다. 키가 들어왔으니 더는 그 이유가
+    아니다. 지금 점수를 막는 것은 계획 C(하드필터 + 4축 스코어링)이고,
+    밸류에이션을 막는 것은 발행주식수다 (stockTotqySttus.json을 아직
+    수집하지 않는다).
+
+    둘 중 하나라도 켜지면 이 테스트가 의도대로 실패한다. 그때 지우지
+    말고 방향을 뒤집어라 — 화면이 "점수 없음"을 정직하게 말하는지가
+    이 테스트가 지키는 것이다.
+    """
     assert snapshot["has_scores"] is False
     assert snapshot["has_valuation"] is False
 
@@ -80,11 +91,30 @@ def test_chart_reference_lines_match_the_list_row(client, snapshot):
 
 
 def test_rationale_contains_the_actual_numbers(client, snapshot):
-    body = client.get("/api/securities/051900.KS").json()
-    joined = " ".join(body["rationale"])
+    """근거 문장의 숫자가 같은 스냅샷의 목록 행과 일치해야 한다.
 
-    assert "295,000" in joined
-    assert "-41.1%" in joined
+    원래는 LG생활건강의 `295,000`과 `-41.1%`를 그대로 박아뒀다. 주가를
+    다시 받을 때마다 깨지는 테스트였고 실제로 깨졌다 — 5일치를 더 받자
+    302,500원이 되면서 -39.2%로 바뀌었다.
+
+    값을 박는 대신 두 표현이 서로 맞는지를 본다. 이쪽이 원래 지키려던
+    것("근거에 엉뚱한 숫자가 나오지 않는다")을 더 정확히 잡으면서
+    데이터 갱신에는 견딘다.
+    """
+    row = client.get("/api/securities").json()[0]
+    assert row["drop_vs_avg_5y"] is not None, "가장 많이 떨어진 행에 하락률이 없다"
+
+    rationale = client.get(f"/api/securities/{row['ticker']}").json()["rationale"]
+
+    # 줄 하나를 통째로 맞춘다. 근거 전체를 join해서 `in`으로 보면 다른
+    # 줄에 남은 같은 숫자가 단언을 만족시켜, 이 줄이 망가져도 통과한다.
+    # (실제로 현재가를 +1 한 변이가 그렇게 빠져나갔다.)
+    expected = (
+        f"5년 평균 대비  {row['price_current']:,.0f}"
+        f" / {row['avg_price_5y']:,.0f}"
+        f" - 1 = {row['drop_vs_avg_5y'] * 100:.1f}%"
+    )
+    assert expected in rationale, f"{expected!r} 가 근거에 없다: {rationale}"
 
 
 def test_excluded_row_names_its_filter(client, snapshot):
@@ -94,10 +124,24 @@ def test_excluded_row_names_its_filter(client, snapshot):
     assert any("FINANCIAL_SECTOR" in line for line in body["rationale"])
 
 
-def test_financials_are_empty_everywhere(client, snapshot):
-    for row in client.get("/api/securities").json()[:5]:
-        body = client.get(f"/api/securities/{row['ticker']}").json()
-        assert body["financials"] == []
+def test_financials_are_filled_in(client, snapshot):
+    """DART 인증키가 들어온 뒤로 재무 연도별 자료가 있어야 한다.
+
+    이 테스트는 원래 `financials == []`를 단언했다. 키가 없던 시절의
+    제품 상태를 지키던 장치다. 키가 들어왔으므로 방향을 뒤집는다.
+    지워버리면 재무가 조용히 사라져도 아무도 모르는 상태로 돌아간다.
+
+    삼성전자를 쓴다. 금융업은 계정 구조가 달라 revenue가 잡히지 않고,
+    목록 첫 행은 주가에 따라 바뀐다.
+    """
+    body = client.get("/api/securities/005930.KS").json()
+    years = [f["fiscal_year"] for f in body["financials"]]
+
+    assert len(years) >= 3
+    assert years == sorted(years), "연도가 오름차순이어야 화면 표가 맞는다"
+    for f in body["financials"]:
+        assert f["revenue"] is not None, f["fiscal_year"]
+        assert f["operating_income"] is not None, f["fiscal_year"]
 
 
 def test_watchlist_round_trips(client, snapshot):
