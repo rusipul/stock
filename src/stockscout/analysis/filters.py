@@ -123,18 +123,36 @@ def apply_financial_filters(
     # 창의 모든 해에서 이자보상배율을 실제로 구할 수 있을 때만 판정한다.
     # 한 해라도 빠지면 len 검사에서 걸려 필터 자체를 건너뛴다 — 무차입이었던
     # 해가 섞여 있다고 해서 나머지 한 해의 부진으로 떨어뜨리지 않는다.
+    # §8.1이 요구하는 것은 "최근 2년 *모두* 배율 < 1"이고, 두 해 중 하나를
+    # 잴 수 없으면 "모두"를 확인할 방법이 없다. 실측 한 해만으로 떨어뜨리면
+    # 그건 2년 필터가 아니라 1년 필터다.
     #
-    # 두 조건은 겹친다. interest_coverage가 interest_expense=None일 때 이미
-    # None을 주고, 0일 때 주는 inf는 아래 all(c < 임계치)를 항상 False로
-    # 만들기 때문이다(변이 테스트로 확인: 앞 조건만 떼면 통과하는 테스트가
-    # 없다). 그래도 남겨 둔다 — 뒤 조건까지 함께 떼면 coverages에 None이
-    # 섞여 아래 비교가 TypeError로 죽는다. 이 줄은 "모르는 것으로
-    # 떨어뜨리지 않는다"를 지키는 지점이므로 정리 대상이 아니다.
+    # 금융원가로 채운 해를 빼는 이유(설계서 §8.1.1): 금융원가는 이자비용의
+    # 상위 개념이라 외화부채 환산손실·파생상품손실이 섞여 있고, 그 비중이
+    # 회사마다 다르다. 실측에서 SK이노베이션의 "이자비용"은 6.36조 —
+    # 매출 80.3조의 8%였다. 어떤 제조업체도 매출의 8%를 이자로 내지 않는다.
+    # 배율이 3~10배 낮게 나오므로 이 값으로 내리는 이진 판정은 보수적인
+    # 것이 아니라 틀린 것이다(대체값을 안 쓴 한국전력은 배율 3.11로 멀쩡히
+    # 통과했다 — 규칙이 아니라 입력이 문제라는 뜻이다).
+    #
+    # 근거는 §8.1이 이미 세운 규칙이다. 이 표는 interest_expense가 NULL이면
+    # 통과시킨다. 금융원가로 채운 값은 이자비용을 *모르는* 상태의 상한
+    # 추정치이지 이자비용이 아니다. 인식론적으로 NULL 쪽에 속하므로 같은
+    # 대접을 받아야 한다. "대체값이라도 쓰는 게 보수적이지 않나?" 싶다면
+    # 위의 6.36조를 다시 봐라.
+    #
+    # 아래 세 조건 중 앞의 둘은 겹친다. interest_coverage가
+    # interest_expense=None일 때 이미 None을 주고, 0일 때 주는 inf는
+    # all(c < 임계치)를 항상 False로 만들기 때문이다(변이 테스트로 확인:
+    # 앞 조건만 떼면 실패하는 테스트가 없다). 그래도 남겨 둔다 — 뒤 조건까지
+    # 함께 떼면 coverages에 None이 섞여 아래 비교가 TypeError로 죽는다.
     coverage_window = years[-config.interest_coverage_years:]
     coverages = [
         f.interest_coverage
         for f in coverage_window
-        if f.interest_expense not in (None, 0) and f.interest_coverage is not None
+        if f.interest_expense not in (None, 0)
+        and "interest_expense" not in f.proxy_fields
+        and f.interest_coverage is not None
     ]
     if (
         len(coverages) == config.interest_coverage_years

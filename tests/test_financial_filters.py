@@ -200,3 +200,60 @@ def test_one_debt_free_year_in_the_window_skips_the_coverage_filter():
     years[-1] = fin(years[-1].fiscal_year, operating_income=5.0, interest_expense=10.0)
 
     assert INTEREST_UNCOVERED not in apply_financial_filters(years, CONFIG).failures
+
+
+def test_proxy_interest_expense_skips_the_coverage_filter():
+    """설계서 §8.1.1: 금융원가로 대신 채운 해는 이자보상배율 판정에서 뺀다.
+
+    금융원가는 이자비용의 상위 개념이라 배율이 3~10배 낮게 나온다.
+    실측에서 SK이노베이션의 '이자비용'이 매출의 8%(6.36조)로 잡혔다.
+    그 값으로 내리는 이진 판정은 보수적인 게 아니라 틀린 것이다.
+    """
+    years = five_years()
+    for i in (-2, -1):
+        years[i] = fin(
+            years[i].fiscal_year,
+            operating_income=5.0,
+            interest_expense=10.0,          # 배율 0.5 — 대체값이 아니었다면 걸린다
+            proxy_fields=["interest_expense"],
+        )
+
+    assert INTEREST_UNCOVERED not in apply_financial_filters(years, CONFIG).failures
+
+
+def test_other_proxy_fields_do_not_disable_the_coverage_filter():
+    """대체값인 항목이 interest_expense일 때만 건너뛴다.
+
+    proxy_fields가 비어 있지 않다는 이유만으로 필터를 끄면, 매출을
+    대체 계정으로 채운 회사가 이자 미충당 판정까지 통째로 면제받는다.
+    """
+    years = five_years()
+    for i in (-2, -1):
+        years[i] = fin(
+            years[i].fiscal_year,
+            operating_income=5.0,
+            interest_expense=10.0,
+            proxy_fields=["revenue"],       # 이자비용은 실측값이다
+        )
+
+    assert INTEREST_UNCOVERED in apply_financial_filters(years, CONFIG).failures
+
+
+def test_one_proxy_year_in_the_window_skips_the_filter():
+    """창에 대체값 해와 실측 해가 섞이면 판정하지 않는다.
+
+    §8.1은 '최근 2년 *모두* 배율 < 1'을 요구한다. 두 해 중 하나를
+    잴 수 없으면 '모두'를 확인할 방법이 없다. NULL·0인 해가 섞였을 때와
+    같은 처리이며, '모르는 것으로 떨어뜨리지 않는다'의 직접적 귀결이다.
+    실측 한 해만으로 떨어뜨리면 그건 2년 필터가 아니라 1년 필터다.
+    """
+    years = five_years()
+    years[-2] = fin(
+        years[-2].fiscal_year, operating_income=5.0, interest_expense=10.0,
+        proxy_fields=["interest_expense"],
+    )
+    years[-1] = fin(
+        years[-1].fiscal_year, operating_income=5.0, interest_expense=10.0,
+    )
+
+    assert INTEREST_UNCOVERED not in apply_financial_filters(years, CONFIG).failures
