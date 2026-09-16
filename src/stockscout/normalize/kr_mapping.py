@@ -240,7 +240,8 @@ def apply_share_counts(fin: Financials, payload: dict) -> None:
 # 그래서 연도로 파싱하지 않고 당기 표기를 찾는다. 실측 210건 중 164건이
 # '(당기)'를 썼고 1건이 '(당)기'였다(우리금융지주 2022). 나머지 45건은
 # 당기를 표시하지 않는다 — 그 경우 첫 행이 최신 기수다(210건 전수에서
-# 첫 행이 최신이 아닌 응답은 0건이었다).
+# 첫 행이 최신이 아닌 응답은 0건이었다). 폴백은 그 근거가 허락하는
+# 딱 한 행, 첫 행만 본다 — 아래 parse_audit_opinion 참조.
 CURRENT_PERIOD_MARKERS = ("(당기)", "(당)기")
 
 
@@ -267,17 +268,30 @@ def parse_audit_opinion(payload: dict) -> str | None:
     본다. 같은 기수의 행들이 서로 다른 의견을 말한 경우는 실측 0건이라
     첫 매치를 써도 안전하다.
 
-    다만 전기로는 내려가지 않는다. 당기 행이 하나라도 있으면 그 밖으로
-    나가지 않는다 — 작년 의견을 올해 것으로 보고하면 감사의견이 적정에서
-    한정으로 바뀌는 해에 정확히 틀리는 방향이다. 폴백은 당기 표기가 아예
-    없는 응답에만 쓴다.
+    어느 경로로도 전기로는 내려가지 않는다. 작년 의견을 올해 것으로
+    보고하면 감사의견이 적정에서 한정으로 바뀌는 해에 정확히 틀리는
+    방향이고, 게다가 그 틀린 값으로 종목을 탈락시키는 쪽이다.
+
+    - 당기 마커가 있으면 당기 행 밖으로 나가지 않는다.
+    - 마커가 없으면 첫 행 하나만 본다. "첫 행이 최신 기수다"가 폴백의
+      유일한 근거이고, 그 근거는 두 번째 행에 대해서는 아무 말도 하지
+      않는다. 첫 행을 건너뛰고 계속 훑으면 '첫 번째 비어 있지 않은 행'을
+      쓰게 되는데 그것은 전기다 — 실측 45건이 이 경로를 탄다.
+
+    첫 행의 의견이 비어 있으면 None이다. 이 저장소의 규칙은 "모르는
+    것으로 떨어뜨리지 않는다"이고, is_adverse_opinion(None)이 False라
+    당기 의견을 모르는 종목은 필터가 건드리지 않는다. 그게 맞는 동작이다.
     """
     rows = payload.get("list", []) or []
     current = [row for row in rows if _is_current_period(row.get("bsns_year"))]
-    for row in current or rows:
-        opinion = (row.get("adt_opinion") or "").strip()
-        if opinion:
-            return opinion
+    if current:
+        for row in current:
+            opinion = (row.get("adt_opinion") or "").strip()
+            if opinion:
+                return opinion
+        return None
+    if rows:
+        return (rows[0].get("adt_opinion") or "").strip() or None
     return None
 
 

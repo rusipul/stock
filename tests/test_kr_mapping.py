@@ -410,10 +410,34 @@ def test_audit_opinion_takes_the_current_period():
 
 
 def test_audit_opinion_falls_back_to_the_first_row_without_a_period_marker():
-    """(당기) 표기가 없는 회사가 있을 수 있다. 첫 행이 최신이다."""
-    payload = {"list": [audit_row("2024", "적정"), audit_row("2023", "적정")]}
+    """(당기) 표기가 없는 회사가 있다(실측 210건 중 45건). 첫 행이 최신이다.
 
-    assert parse_audit_opinion(payload) == "적정"
+    두 행의 값이 달라야 '첫 행을 쓴다'가 실제로 고정된다 — 같은 값을
+    넣으면 어느 행을 쓰든 통과해서 아무것도 지키지 못한다.
+    """
+    payload = {"list": [audit_row("제10기", "적정의견"),
+                        audit_row("제9기", "한정의견")]}
+
+    assert parse_audit_opinion(payload) == "적정의견"
+
+
+def test_audit_opinion_fallback_never_reaches_past_the_first_row():
+    """마커가 없고 첫 행이 비어 있으면 값 없음이다. 전기로 내려가지 않는다.
+
+    폴백의 근거는 "첫 행이 최신 기수다" 하나뿐이고, 그 근거는 두 번째
+    행에 대해 아무 말도 하지 않는다. '첫 번째 비어 있지 않은 행'을 쓰면
+    전기의 한정의견이 당기 의견으로 보고되어, 낡은 정보로 우량주를
+    탈락시킨다 — 이 저장소의 "모르는 것으로 떨어뜨리지 않는다"를
+    정면으로 거스르는 방향이다.
+
+    None이면 is_adverse_opinion(None)이 False라 필터가 이 종목을
+    건드리지 않는다. 그게 맞는 동작이다.
+    """
+    payload = {"list": [audit_row("제10기", ""),
+                        audit_row("제9기", "한정의견")]}
+
+    assert parse_audit_opinion(payload) is None
+    assert is_adverse_opinion(parse_audit_opinion(payload)) is False
 
 
 def test_audit_opinion_returns_none_when_absent():
@@ -463,7 +487,13 @@ def test_audit_opinion_never_reports_a_prior_period_as_the_current_one():
 
 
 def test_adverse_opinion_detection():
-    """'적정'이 들어 있으면 통과. 그 외는 전부 결격이다."""
+    """아는 결격 단어가 들어 있으면 결격이다.
+
+    '적정 화이트리스트'가 아니다 — '적정이 없으면 결격'으로 읽지 마라.
+    모르는 표기를 결격으로 처리하지 않는 것이 이 함수의 요점이고,
+    바로 아래 test_unknown_opinion_is_not_treated_as_adverse가 그것을
+    단언한다.
+    """
     assert is_adverse_opinion("적정의견") is False
     assert is_adverse_opinion("적정") is False
     assert is_adverse_opinion("한정의견") is True
