@@ -422,13 +422,37 @@ def test_audit_opinion_returns_none_when_absent():
     assert parse_audit_opinion({"list": [audit_row("제56기\n(당기)", "")]}) is None
 
 
-def test_audit_opinion_never_reports_a_prior_period_as_the_current_one():
-    """당기 행이 있는데 그 의견이 비어 있으면 값이 없는 것이다.
+def test_audit_opinion_keeps_scanning_current_period_rows_past_an_empty_one():
+    """당기 행은 여럿일 수 있다 — 실측 210건 중 74건이 그렇다.
 
-    폴백이 '첫 번째 비어 있지 않은 행'이면 전기의 적정의견을 당기 것으로
-    보고하게 된다. 감사의견이 바뀌는 해(적정 -> 한정)에 정확히 틀린 답을
-    내는 방향이라 그냥 값 없음으로 둔다. 폴백은 기수 표기가 아예 없는
-    응답에만 쓴다.
+    첫 당기 행의 의견이 비어 있다고 값이 없는 것이 아니다. 같은 기수의
+    다음 행에 의견이 있으면 그것이 답이다. 같은 기수의 행들이 서로 다른
+    의견을 말한 경우는 실측 0건이라 첫 매치를 써도 안전하다.
+
+    당기 행을 만나자마자 그 자리에서 반환하는 구현은 여기서 None을
+    내놓는다. 실측 210건에서는 두 구현의 결과가 한 건도 갈리지 않지만,
+    첫 당기 행이 빈 응답이 하나만 들어와도 의견을 통째로 잃는다.
+    """
+    payload = {"list": [
+        audit_row("제56기\n(당기)", ""),
+        audit_row("제56기\n(당기)", "적정의견"),
+        audit_row("제55기\n(전기)", "한정의견"),
+    ]}
+
+    assert parse_audit_opinion(payload) == "적정의견"
+
+
+def test_audit_opinion_never_reports_a_prior_period_as_the_current_one():
+    """당기 행만 훑고 전기로는 내려가지 않는다.
+
+    작년 의견을 올해 것으로 보고하면 감사의견이 적정에서 한정으로 바뀌는
+    해에 정확히 틀린 답을 낸다. 당기 행이 하나라도 있으면 그 밖으로
+    나가지 않고, 전부 비어 있으면 값 없음으로 둔다.
+
+    이 경계는 '당기 행에서 즉시 반환'하는 구현도 똑같이 지키므로 이
+    테스트가 두 구현을 갈라내지는 못한다 — 위 테스트가 그 역할이다.
+    여기서 지키는 것은 2단계 폴백을 나중에 손댈 때 당기 밖으로 새지
+    않는다는 것이다.
     """
     payload = {"list": [
         audit_row("제56기\n(당기)", ""),
