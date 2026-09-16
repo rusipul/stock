@@ -230,3 +230,51 @@ def apply_share_counts(fin: Financials, payload: dict) -> None:
         fin.shares_outstanding = issued
     if treasury is not None:
         fin.shares_treasury = treasury
+
+
+# accnutAdtorNmNdAdtOpinion.json의 bsns_year는 연도가 아니라 기수 표기다.
+# KOSPI 42종목 210건 전수 조사에서 표기가 407종이었다 — '제56기\n(당기)',
+# '제 50 기\n(당기)', '제23기(당기)', '제4(당)기', "제52기\n('24.01.01~
+# '24.12.31)", '제46기 연간\n제46기 3분기…', 그리고 모든 칸이 '-'인 행까지.
+#
+# 그래서 연도로 파싱하지 않고 당기 표기를 찾는다. 실측 210건 중 164건이
+# '(당기)'를 썼고 1건이 '(당)기'였다(우리금융지주 2022). 나머지 45건은
+# 당기를 표시하지 않는다 — 그 경우 첫 행이 최신 기수다(210건 전수에서
+# 첫 행이 최신이 아닌 응답은 0건이었다).
+CURRENT_PERIOD_MARKERS = ("(당기)", "(당)기")
+
+
+def _is_current_period(bsns_year: str | None) -> bool:
+    """기수 표기가 당기를 가리키는가. 공백·줄바꿈을 모두 지우고 본다."""
+    key = "".join((bsns_year or "").split())
+    return any(marker in key for marker in CURRENT_PERIOD_MARKERS)
+
+
+def parse_audit_opinion(payload: dict) -> str | None:
+    """회계감사인의 명칭 및 감사의견 → 최근 사업연도의 감사의견 원문.
+
+    같은 기수가 여러 행으로 중복돼 오는 응답이 있다. 계획서는 "기수당
+    2행"이라 했지만 실측은 그렇지 않다 — 210건 중 116건은 중복이 없고
+    (기수당 1행), 79건이 2행씩, 14건은 모든 칸이 '-'인 빈 응답이며
+    1건은 4행+2행이었다. 같은 기수의 행이 서로 다른 의견을 말한 경우는
+    0건이라 첫 매치만 써도 안전하다.
+
+    당기 행이 하나라도 있으면 그 안에서만 찾는다. 당기 행의 의견이 비어
+    있을 때 전기 행으로 내려가면 작년 의견을 올해 것으로 보고하게 되고,
+    그것은 감사의견이 적정에서 한정으로 바뀌는 해에 정확히 틀리는
+    방향이다. 폴백은 당기 표기가 아예 없는 응답에만 쓴다.
+    """
+    rows = payload.get("list", []) or []
+    current = [row for row in rows if _is_current_period(row.get("bsns_year"))]
+    for row in current or rows:
+        opinion = (row.get("adt_opinion") or "").strip()
+        if opinion:
+            return opinion
+    return None
+
+
+def apply_audit_opinion(fin: Financials, payload: dict) -> None:
+    """감사의견 원본을 이미 만들어진 Financials 위에 얹는다."""
+    opinion = parse_audit_opinion(payload)
+    if opinion is not None:
+        fin.audit_opinion = opinion

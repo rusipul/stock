@@ -3,10 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from stockscout.models import RawStatement
+from stockscout.models import RawStatement, is_adverse_opinion
 from stockscout.normalize.kr_mapping import (
     BLANK_AMOUNTS,
     normalize_dart_statement,
+    parse_audit_opinion,
     parse_share_counts,
     pick_amount,
     pick_tiered,
@@ -385,3 +386,173 @@ def test_shares_skips_a_voting_row_that_is_also_preferred():
     ]}
 
     assert parse_share_counts(payload) == (999.0, 9.0)
+
+
+# --- 감사의견 (accnutAdtorNmNdAdtOpinion.json) ------------------------
+#
+# 아래 실측 payload는 KOSPI 42종목 x 5개년 = 210건 전수 조사에서 그대로
+# 따왔다. bsns_year 표기가 407종, adt_opinion이 10종이었다.
+
+
+def audit_row(bsns_year, opinion, adtor="삼정회계법인"):
+    return {"bsns_year": bsns_year, "adt_opinion": opinion, "adtor": adtor}
+
+
+def test_audit_opinion_takes_the_current_period():
+    """bsns_year가 연도가 아니라 '제56기\n(당기)'다. 줄바꿈이 박혀 있다."""
+    payload = {"list": [
+        audit_row("제56기\n(당기)", "적정의견"),
+        audit_row("제56기\n(당기)", "적정의견"),
+        audit_row("제55기\n(전기)", "한정의견"),
+    ]}
+
+    assert parse_audit_opinion(payload) == "적정의견"
+
+
+def test_audit_opinion_falls_back_to_the_first_row_without_a_period_marker():
+    """(당기) 표기가 없는 회사가 있을 수 있다. 첫 행이 최신이다."""
+    payload = {"list": [audit_row("2024", "적정"), audit_row("2023", "적정")]}
+
+    assert parse_audit_opinion(payload) == "적정"
+
+
+def test_audit_opinion_returns_none_when_absent():
+    assert parse_audit_opinion({}) is None
+    assert parse_audit_opinion({"list": []}) is None
+    assert parse_audit_opinion({"list": [audit_row("제56기\n(당기)", "")]}) is None
+
+
+def test_audit_opinion_never_reports_a_prior_period_as_the_current_one():
+    """당기 행이 있는데 그 의견이 비어 있으면 값이 없는 것이다.
+
+    폴백이 '첫 번째 비어 있지 않은 행'이면 전기의 적정의견을 당기 것으로
+    보고하게 된다. 감사의견이 바뀌는 해(적정 -> 한정)에 정확히 틀린 답을
+    내는 방향이라 그냥 값 없음으로 둔다. 폴백은 기수 표기가 아예 없는
+    응답에만 쓴다.
+    """
+    payload = {"list": [
+        audit_row("제56기\n(당기)", ""),
+        audit_row("제55기\n(전기)", "적정의견"),
+    ]}
+
+    assert parse_audit_opinion(payload) is None
+
+
+def test_adverse_opinion_detection():
+    """'적정'이 들어 있으면 통과. 그 외는 전부 결격이다."""
+    assert is_adverse_opinion("적정의견") is False
+    assert is_adverse_opinion("적정") is False
+    assert is_adverse_opinion("한정의견") is True
+    assert is_adverse_opinion("부적정의견") is True
+    assert is_adverse_opinion("의견거절") is True
+
+
+def test_unknown_opinion_is_not_treated_as_adverse():
+    """모르는 값으로 종목을 떨어뜨리지 않는다.
+
+    DART 문서가 값 목록을 명시하지 않는다. 처음 보는 문자열을 결격으로
+    처리하면, 표기가 조금 다른 회사가 통째로 사라지고 아무도 이유를
+    모른다. 결격 판정은 아는 단어에만 건다.
+    """
+    assert is_adverse_opinion(None) is False
+    assert is_adverse_opinion("") is False
+    assert is_adverse_opinion("검토의견 없음") is False
+
+
+def test_adverse_opinion_ignores_every_kind_of_whitespace():
+    """이 엔드포인트는 값 한가운데에 줄바꿈을 박아 보낸다.
+
+    실측에서 '삼일\n회계법인', '적정\n예외사항 없음', '제56기\n(당기)'가
+    나왔다. 공백만 지우면 '의견\n거절'이 결격으로 잡히지 않는다 —
+    가장 강한 결격 신호를 조용히 흘려보내는 방향의 실수다.
+    """
+    assert is_adverse_opinion("의견\n거절") is True
+    assert is_adverse_opinion("의견 거절") is True
+    assert is_adverse_opinion("한정\t의견") is True
+
+
+def test_spaced_proper_opinion_is_not_adverse():
+    """기아 2021~2023 실측값이 '적 정'이다. 공백을 지워도 결격이 아니다."""
+    assert is_adverse_opinion("적 정") is False
+
+
+# --- 실측 payload 회귀 테스트 ---------------------------------------
+
+
+def test_audit_opinion_reads_samsung_electronics_as_reported():
+    """삼성전자 2021 실측. '제53기 \n(당기)' — 공백과 줄바꿈이 함께 있다."""
+    payload = {"list": [
+        audit_row("제53기 \n(당기)", "적정", "안진회계법인"),
+        audit_row("제52기\n(전기)", "적정", "안진회계법인"),
+        audit_row("제51기\n(전전기)", "적정", "삼일회계법인"),
+    ]}
+
+    assert parse_audit_opinion(payload) == "적정"
+
+
+def test_audit_opinion_recognizes_the_alternate_current_period_marker():
+    """우리금융지주 2022 실측. 표기가 '(당기)'가 아니라 '제4(당)기'다.
+
+    값 자체는 각주 참조('(*1)')라 의견이 아니지만, 원문 그대로 남긴다 —
+    is_adverse_opinion이 모르는 값을 결격으로 보지 않으므로 종목이
+    사라지지 않고, DB를 들여다본 사람은 DART가 무엇을 줬는지 알 수 있다.
+    """
+    payload = {"list": [
+        audit_row("제4(당)기", "(*1)", "삼일회계법인"),
+        audit_row("제3(전)기", "(*2)", "삼일회계법인"),
+        audit_row("제2(전전)기", "(*3)", "삼일회계법인"),
+    ]}
+
+    assert parse_audit_opinion(payload) == "(*1)"
+    assert is_adverse_opinion("(*1)") is False
+
+
+def test_audit_opinion_reads_hyundai_motor_placeholder_rows_as_no_data():
+    """현대차 2024·2025 실측. status=000인데 모든 칸이 '-'이고
+    adt_opinion 키 자체가 없다. 210건 중 14건이 이 모양이었다."""
+    payload = {"list": [
+        {"bsns_year": "-", "adtor": "-", "adt_reprt_spcmnt_matter": "-"},
+        {"bsns_year": "-", "adtor": "-", "adt_reprt_spcmnt_matter": "-"},
+        {"bsns_year": "-", "adtor": "-", "adt_reprt_spcmnt_matter": "-"},
+    ]}
+
+    assert parse_audit_opinion(payload) is None
+
+
+def test_audit_opinion_reads_samsung_electro_mechanics_dated_periods():
+    """삼성전기 2024 실측. 기수 옆에 (당기)가 아니라 기간이 붙는다.
+
+    마커가 없으므로 폴백이 쓰이고, 첫 행이 최신 기수다(210건 전수에서
+    첫 행이 최신이 아닌 응답은 0건이었다).
+    """
+    payload = {"list": [
+        audit_row("제52기\n('24.01.01~'24.12.31)", "적정의견", "안진회계법인"),
+        audit_row("제52기\n('24.01.01~'24.12.31)", "적정의견", "안진회계법인"),
+        audit_row("제51기\n('23.01.01~'23.12.31)", "적정의견", "안진회계법인"),
+        audit_row("제51기\n('23.01.01~'23.12.31)", "적정의견", "안진회계법인"),
+        audit_row("제50기\n('22.01.01~'22.12.31)", "적정의견", "삼일회계법인"),
+        audit_row("제50기\n('22.01.01~'22.12.31)", "적정의견", "삼일회계법인"),
+    ]}
+
+    assert parse_audit_opinion(payload) == "적정의견"
+
+
+def test_audit_opinion_reads_lg_innotek_multi_period_cell():
+    """LG이노텍 2021 실측. 한 칸에 연간·3분기·반기·1분기가 줄바꿈으로
+    붙어 온다. 원문을 그대로 남기되 결격으로 보지 않아야 한다."""
+    payload = {"list": [
+        audit_row("제46기 연간\n제46기 3분기\n제46기 반기\n제46기 1분기",
+                  "적정\n예외사항 없음\n예외사항 없음\n예외사항 없음"),
+    ]}
+
+    opinion = parse_audit_opinion(payload)
+
+    assert opinion.startswith("적정")
+    assert is_adverse_opinion(opinion) is False
+
+
+def test_audit_opinion_strips_stray_leading_whitespace():
+    """고려아연 2021은 ' 적정의견', 현대모비스 2021은 ' 적정'으로 온다."""
+    assert parse_audit_opinion(
+        {"list": [audit_row("제48기(당기)", " 적정의견")]}
+    ) == "적정의견"

@@ -7,7 +7,7 @@ from datetime import date
 from pydantic import BaseModel
 
 from stockscout.sources.base import FatalSourceError, FundamentalSource, PriceSource
-from stockscout.sources.dart import SOURCE_SHARES
+from stockscout.sources.dart import SOURCE_AUDIT, SOURCE_SHARES
 from stockscout.sources.ratelimit import DailyQuotaExceeded
 from stockscout.store.repository import Repository
 
@@ -31,6 +31,7 @@ class CollectSummary(BaseModel):
     failed: int = 0
     statements: int = 0
     shares: int = 0
+    audits: int = 0
     price_bars: int = 0
     aborted: bool = False
     abort_reason: str | None = None
@@ -40,7 +41,7 @@ class CollectSummary(BaseModel):
         lines = [
             f"대상 {self.total}종목 · 성공 {self.succeeded} · 실패 {self.failed}",
             f"재무제표 {self.statements}건 · 주식수 {self.shares}건 "
-            f"· 주가 {self.price_bars}봉 저장",
+            f"· 감사의견 {self.audits}건 · 주가 {self.price_bars}봉 저장",
         ]
         if self.aborted:
             # 중단 사유는 늘 일일 한도 소진이 아니다 (예: 등록되지 않은 API
@@ -131,6 +132,23 @@ def collect_market(
                 aborted = True
             except Exception as exc:  # 종목 단위 격리 (설계서 §13)
                 repo.record_error(ticker, SOURCE_SHARES,
+                                  f"{type(exc).__name__}: {exc}")
+                ticker_failed = True
+
+        # 주식수와 또 별개의 try. 같은 이유다 — 감사의견 조회가 실패해도
+        # 재무제표·주식수·주가는 남아야 한다 (설계서 §13).
+        if not aborted:
+            try:
+                summary.audits += _collect_optional(
+                    repo, ticker, fundamentals, "fetch_audit",
+                    SOURCE_AUDIT, years, force,
+                )
+            except ABORTING_ERRORS as exc:
+                repo.record_error(ticker, SOURCE_AUDIT, str(exc))
+                summary.abort_reason = str(exc)
+                aborted = True
+            except Exception as exc:  # 종목 단위 격리 (설계서 §13)
+                repo.record_error(ticker, SOURCE_AUDIT,
                                   f"{type(exc).__name__}: {exc}")
                 ticker_failed = True
 

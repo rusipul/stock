@@ -7,7 +7,11 @@ from collections.abc import Callable
 from pydantic import BaseModel
 
 from stockscout.models import Financials
-from stockscout.normalize.kr_mapping import apply_share_counts, normalize_dart_statement
+from stockscout.normalize.kr_mapping import (
+    apply_audit_opinion,
+    apply_share_counts,
+    normalize_dart_statement,
+)
 from stockscout.store.repository import Repository
 
 # 보강 함수는 이미 만들어진 Financials를 제자리에서 고친다.
@@ -24,7 +28,10 @@ NORMALIZERS = {"KR": ("dart", normalize_dart_statement)}
 # 만들면 필수 항목이 전부 비어 DATA_INSUFFICIENT가 될 뿐이다. 금융
 # 7종목의 2021·2022년이 정확히 그 모양이다(DART에 재무제표가 없다).
 ENRICHERS: dict[str, list[tuple[str, Enricher]]] = {
-    "KR": [("dart_shares", apply_share_counts)],
+    "KR": [
+        ("dart_shares", apply_share_counts),
+        ("dart_audit", apply_audit_opinion),
+    ],
 }
 
 

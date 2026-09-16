@@ -36,6 +36,10 @@ REPORT_CODE_ANNUAL = "11011"  # 사업보고서
 # source)라 서로 덮어쓰지 않는다.
 SOURCE_SHARES = "dart_shares"
 
+# 회계감사인의 명칭 및 감사의견(accnutAdtorNmNdAdtOpinion.json)의
+# raw_financials.source 값. 주식수와 같은 이유로 테이블을 늘리지 않는다.
+SOURCE_AUDIT = "dart_audit"
+
 
 class DartServiceUnavailable(ConnectionError):
     """DART가 점검 중이라 응답을 내주지 못한다 (status=800).
@@ -168,6 +172,29 @@ class DartSource:
             ))
         return statements
 
+    def fetch_audit(self, ticker: str, years: list[int]) -> list[RawStatement]:
+        """회계감사인의 명칭 및 감사의견을 연도별로 받는다.
+
+        fetch_shares와 같은 모양이다 — 파라미터가 재무제표 API와 같고
+        source만 달리해 raw_financials에 담는다 (설계서 §8.1·§17.4).
+        """
+        self.ensure_corp_codes()
+        stock_code = self._stock_code(ticker)
+        corp_code = self.corp_codes.get(stock_code)
+        if not corp_code:
+            raise PermanentSourceError(f"{ticker}의 corp_code를 찾을 수 없습니다")
+
+        statements: list[RawStatement] = []
+        for year in years:
+            payload = self._fetch_audit_one_year(corp_code, year)
+            if payload is None:
+                continue
+            statements.append(RawStatement(
+                ticker=ticker, fiscal_year=year,
+                source=SOURCE_AUDIT, payload=payload,
+            ))
+        return statements
+
     @retry_on_transient(attempts=3)
     def _fetch_one_year(self, corp_code: str, year: int) -> dict | None:
         """한 회계연도의 연결 재무제표 원본. 데이터가 없으면 None."""
@@ -179,6 +206,13 @@ class DartSource:
     def _fetch_shares_one_year(self, corp_code: str, year: int) -> dict | None:
         """한 회계연도의 주식의 총수 현황. 데이터가 없으면 None."""
         return self._fetch_json("stockTotqySttus.json", corp_code, year, {})
+
+    @retry_on_transient(attempts=3)
+    def _fetch_audit_one_year(self, corp_code: str, year: int) -> dict | None:
+        """한 회계연도의 감사인·감사의견. 데이터가 없으면 None."""
+        return self._fetch_json(
+            "accnutAdtorNmNdAdtOpinion.json", corp_code, year, {}
+        )
 
     def _fetch_json(
         self, endpoint: str, corp_code: str, year: int, extra: dict[str, str]

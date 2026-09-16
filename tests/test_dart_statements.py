@@ -309,3 +309,82 @@ def test_fetch_shares_retries_800_exactly_three_times(monkeypatch):
         source.fetch_shares("005930.KS", [2024])
 
     assert calls["n"] == 3
+
+
+# --- 회계감사인의 명칭 및 감사의견 (accnutAdtorNmNdAdtOpinion.json) ----
+
+
+def test_fetch_audit_tags_statements_with_its_own_source():
+    """source가 다르면 재무제표·주식수와 같은 (ticker, year)라도 서로를
+    덮어쓰지 않는다. raw_financials의 PK가 (ticker, fiscal_year, source)다."""
+    source = make_source(endpoint_handler({
+        "accnutAdtorNmNdAdtOpinion.json": {"status": "000", "list": [
+            {"bsns_year": "제56기\n(당기)", "adt_opinion": "적정의견",
+             "adtor": "삼정회계법인"},
+        ]},
+    }))
+    source.corp_codes = {"005930": "00126380"}
+
+    (stmt,) = source.fetch_audit("005930.KS", [2024])
+
+    assert stmt.source == "dart_audit"
+    assert stmt.fiscal_year == 2024
+    assert stmt.payload["list"][0]["adt_opinion"] == "적정의견"
+
+
+def test_fetch_audit_skips_years_with_no_data():
+    source = make_source(endpoint_handler({
+        "accnutAdtorNmNdAdtOpinion.json": {
+            "status": "013", "message": "조회된 데이타가 없습니다."},
+    }))
+    source.corp_codes = {"005930": "00126380"}
+
+    assert source.fetch_audit("005930.KS", [2021, 2022]) == []
+
+
+def test_fetch_audit_uses_the_audit_endpoint_without_fs_div():
+    """주식수와 마찬가지로 fs_div는 이 엔드포인트에 없는 필드다.
+    보내면 status=100(필드 값 오류)을 받을 수 있다."""
+    seen: list[httpx.URL] = []
+
+    def handler(request):
+        seen.append(request.url)
+        return json_response("000", list=[])
+
+    source = make_source(handler)
+    source.corp_codes = {"005930": "00126380"}
+
+    source.fetch_audit("005930.KS", [2024])
+
+    (url,) = seen
+    assert url.path.endswith("/accnutAdtorNmNdAdtOpinion.json")
+    assert "fs_div" not in url.params
+    assert url.params["reprt_code"] == "11011"
+    assert url.params["corp_code"] == "00126380"
+    assert url.params["bsns_year"] == "2024"
+
+
+def test_fetch_audit_raises_permanent_on_unknown_ticker():
+    source = make_source(lambda r: json_response("000", list=[]))
+    source.corp_codes = {"005930": "00126380"}
+
+    with pytest.raises(PermanentSourceError, match="corp_code"):
+        source.fetch_audit("999999.KS", [2024])
+
+
+def test_fetch_audit_retries_800_exactly_three_times(monkeypatch):
+    """_fetch_json에 retry_on_transient을 중첩해서 붙이면 3회가 9회가 된다."""
+    monkeypatch.setattr("stockscout.sources.ratelimit.time.sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return json_response("800", "서비스 점검중입니다")
+
+    source = make_source(handler)
+    source.corp_codes = {"005930": "00126380"}
+
+    with pytest.raises(ConnectionError):
+        source.fetch_audit("005930.KS", [2024])
+
+    assert calls["n"] == 3
