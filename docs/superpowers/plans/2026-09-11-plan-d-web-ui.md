@@ -105,6 +105,94 @@ sources normalize analysis store
 
 ---
 
+## 실행 중 발견된 변경 (2026-09-11)
+
+### 쿼리 파라미터에 `Literal[1, 3, 5]`를 쓰면 안 된다
+
+Task 4의 차트 창 파라미터를 `window: Literal[1, 3, 5] = 5`로 선언했더니
+**1·3·5가 전부 422로 거부됐다.** 세 값 중 하나가 아니라 셋 다 막힌다.
+
+쿼리 문자열은 pydantic에 문자열로 들어오고, `Literal`은 정수 리터럴과
+문자열 `"1"`을 같은 값으로 보지 않는다. `int`였다면 강제 변환이 일어나지만
+`Literal`은 변환 대상이 아니라 비교 대상이다. 세 방식을 나란히 실측했다.
+
+| 선언 | 런타임 | OpenAPI 스키마 |
+|---|---|---|
+| `Literal[1, 3, 5]` | 전부 422 | 값 3개가 나온다 |
+| `int` + 수동 검증 | 동작 | 제약이 안 보인다 |
+| `IntEnum` | 동작 | 값 3개가 나온다 |
+
+`IntEnum`만 런타임과 스키마 양쪽에서 맞다. `ChartWindow(IntEnum)`을
+`web/api.py`에 두고 이유를 docstring에 적었다.
+
+### `serve()`가 바인드에 실패해도 성공을 보고했다
+
+포트 8765가 이전 세션 서버에 점유된 상태로 `stockscout serve`를 띄웠더니
+`http://127.0.0.1:8765 에서 실행 중입니다`가 먼저 찍히고 uvicorn이 뒤이어
+종료했다. `print`가 `uvicorn.run()` **앞**에 있기 때문이다. 브라우저를
+열어보기 전까지는 서버가 떠 있다고 믿게 된다.
+
+소켓을 `serve()`가 직접 바인드한 뒤 출력하도록 바꿨다. 겸사겸사 uvicorn이
+켜는 `SO_REUSEADDR`을 끊었다 — 윈도우에서 그 옵션은 "이미 쓰는 주소에도
+붙어라"는 뜻이라, 남의 서버 위에 얹히고도 성공할 수 있다.
+
+부수적으로 함께 고친 것:
+
+- 브라우저가 자동 요청하던 `/favicon.ico` 404 → 인라인 data URI로 요청 자체를 제거
+- 파이프로 넘길 때 블록 버퍼링에 걸려 주소 줄이 종료 시점까지 안 보이던 문제 (`flush=True`)
+- `.gitignore`가 `data/*.db-journal`만 막고 WAL 모드의 `-shm`/`-wal`을 흘리던 문제
+
+### `python -m stockscout`는 동작하지 않는다
+
+`__main__.py`가 없다. 진입점은 콘솔 스크립트(`.venv/Scripts/stockscout.exe`)
+하나다. 문서와 안내 문구는 전부 `stockscout ...` 형태를 쓴다.
+
+### 실제 브라우저 관통 검증 (Task 8 Step 3)
+
+Chromium으로 9개 항목을 전부 확인했다. **콘솔 에러 0건, 실패 요청 0건.**
+
+| # | 항목 | 결과 |
+|---|---|---|
+| 1 | 상단 정보 | `기준일 2026-09-10 · 42종목 · 통과 34 · 제외 8` |
+| 2 | 슬라이더 -40%→-20% | 3→4종목, **네트워크 요청 0건** |
+| 3 | `임계치 이하` 칩 | 3종목 |
+| 4 | 차트 기준선 | 1,393,000 / 500,559 / 319,391 / 268,180 |
+| 5 | 판정 근거 | `295,000 / 500,559 - 1 = -41.1%` |
+| 6 | 재무 추이 자리 | DART 인증키 발급 + 3단계 명령 |
+| 7 | KB금융 | `제외` 뱃지 + `FINANCIAL_SECTOR` |
+| 8 | 별 → 새로고침 | 유지됨 |
+| 9 | 검색 `삼성` | 8종목 (기대 목록과 일치) |
+
+2번이 설계서 §6.1의 핵심이다. 슬라이더를 움직여도 요청이 한 건도 나가지
+않는다 — 등급 재계산이 전부 클라이언트에서 일어난다.
+
+### 테스트 수
+
+Task 8 Step 4의 `356 passed`는 계획을 쓸 때의 추정치였다. 실제는
+**407 passed, 2 skipped**이다. skip 2건은 DART 응답 픽스처가 없어서 멈춰
+있는 것으로, 인증키가 나오면 풀린다.
+
+### 계획 C가 알아야 할 것
+
+1. **`has_scores`·`has_valuation`이 화면 전체의 스위치다.** 점수를 채우면
+   우량주 점수 슬라이더, ★★/★ 등급 칩, 점수 KPI, 재무 추이 5년표가 전부
+   자동으로 살아난다. 화면 쪽 추가 작업이 필요 없다. 다만 설계서 §11.2의
+   「점수 분해」 4축 막대는 새로 붙여야 한다.
+
+2. **판정 근거 문장은 `web/api.py`의 모듈 수준 `_rationale(row, failures)`가
+   만든다.** 점수 산출 줄은 여기에 추가한다.
+
+3. **`tests/test_web_integration.py`는 지금의 실제 DB 상태를 하드코딩한다.**
+   계획 C가 성공하면 `test_scores_are_absent_until_dart_key`와
+   `test_financials_are_empty_everywhere`가 **의도대로 실패한다.** 그때
+   지우지 말고 반대 방향 단언으로 바꿔라. 이 두 테스트는 "아직 없다"가 아니라
+   "없다는 사실이 화면에 정직하게 드러난다"를 지키는 장치다.
+
+4. **등급 재계산에 서버 왕복을 들이지 마라.** 점수 기준이 추가돼도 `app.js`의
+   `hits(row)` 안에서 끝나야 한다 (설계서 §6.1).
+
+---
+
 ## Task 1: FastAPI 앱 골격과 serve 명령
 
 **Files:**
@@ -224,7 +312,7 @@ def test_snapshot_reports_whether_scores_exist(client):
     body = client.get("/api/snapshot").json()
 
     assert body["has_scores"] is False
-    assert body["has_financials"] is False
+    assert body["has_valuation"] is False
 
 
 def test_snapshot_404_when_no_snapshot(tmp_path):
@@ -282,7 +370,11 @@ class SnapshotInfo(BaseModel):
     # 프론트가 등급·점수 UI를 켤지 결정하는 근거.
     # 점수가 없는데 등급을 보여주면 품질을 검증한 것처럼 보이는 거짓말이 된다.
     has_scores: bool
-    has_financials: bool
+
+    # 시가총액·PER·PBR을 계산할 수 있었는가.
+    # financials 테이블이 채워졌는지와 다른 질문이다 — 발행주식수는
+    # 재무제표 API가 아니라 stockTotqySttus.json 에서 온다.
+    has_valuation: bool
 
 
 class SecurityRow(BaseModel):
@@ -381,7 +473,7 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                 passed=sum(1 for r in rows if r["passed_filters"]),
                 excluded=sum(1 for r in rows if not r["passed_filters"]),
                 has_scores=any(r["score_total"] is not None for r in rows),
-                has_financials=any(r["per"] is not None for r in rows),
+                has_valuation=any(r["per"] is not None for r in rows),
             )
 
         return read(build)
@@ -485,12 +577,12 @@ c = TestClient(create_app('data/stockscout.db'))
 s = c.get('/api/snapshot').json()
 print('snapshot', s['snapshot_id'], 'as_of', s['as_of'])
 print('total', s['total'], 'passed', s['passed'], 'excluded', s['excluded'])
-print('has_scores', s['has_scores'], 'has_financials', s['has_financials'])
+print('has_scores', s['has_scores'], 'has_valuation', s['has_valuation'])
 print('index', c.get('/').status_code)
 "
 ```
 
-Expected: `total 42 passed 34 excluded 8`, `has_scores False has_financials False`, `index 200`
+Expected: `total 42 passed 34 excluded 8`, `has_scores False has_valuation False`, `index 200`
 
 - [ ] **Step 10: 전체 스위트를 돌리고 커밋한다**
 
@@ -1237,7 +1329,12 @@ def test_unsupported_years_is_rejected(client):
     assert response.status_code == 422
 
 
-def test_ticker_without_prices_returns_empty_series(client, db):
+def test_ticker_in_master_but_absent_from_snapshot_is_404(client, db):
+    """이름 주의 — 이 테스트는 "주가 없음"이 아니라 "스냅샷에 없음" 분기를 탄다.
+
+    EMPTY.KS 를 securities 에만 넣고 스냅샷에는 넣지 않으므로, 404가
+    앞쪽 분기에서 난다. 진짜 no-bars 분기는 아래 테스트가 덮는다.
+    """
     with connect(db) as conn:
         Repository(conn).upsert_security(Security(
             ticker="EMPTY.KS", market="KR", name="빈종목", currency="KRW"))
@@ -1290,7 +1387,7 @@ class PriceSeries(BaseModel):
     @app.get("/api/securities/{ticker}/prices", response_model=PriceSeries)
     def get_prices(
         ticker: str,
-        years: Literal[1, 3, 5] = 5,
+        years: ChartWindow = ChartWindow.FIVE,
     ) -> PriceSeries:
         def build(repo: Repository) -> PriceSeries:
             snap = repo.get_latest_snapshot()
@@ -1331,6 +1428,25 @@ class PriceSeries(BaseModel):
 
 ```python
 from datetime import date
+from enum import IntEnum
+```
+
+`STATIC_DIR` 아래에 구간 열거형을 둔다:
+
+```python
+class ChartWindow(IntEnum):
+    """차트에 그릴 구간(년). 스키마가 허용값을 스스로 문서화한다.
+
+    Literal[1, 3, 5]를 쓰면 안 된다. 이 FastAPI/pydantic 조합에서
+    쿼리스트링 "1"이 int 리터럴 1로 캐스팅되지 않아 1·3·5가 전부
+    422로 거부된다(실측 확인). 정수 Literal만 그렇고, sort 파라미터의
+    Literal["drop", "name", "ticker"]처럼 문자열 Literal은 정상이다.
+    IntEnum은 정상 캐스팅되고 OpenAPI 스키마에도 허용값이 남는다.
+    """
+
+    ONE = 1
+    THREE = 3
+    FIVE = 5
 ```
 
 `_rationale` 옆에 헬퍼를 추가한다:
@@ -2438,7 +2554,7 @@ def test_snapshot_matches_cli_counts(snapshot):
 
 def test_scores_are_absent_until_dart_key(snapshot):
     assert snapshot["has_scores"] is False
-    assert snapshot["has_financials"] is False
+    assert snapshot["has_valuation"] is False
 
 
 def test_list_returns_every_security(client, snapshot):

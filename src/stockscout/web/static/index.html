@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stockscout</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ctext y=%2713%27 font-size=%2713%27%3E%F0%9F%93%89%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+  <header id="topbar">
+    <span class="brand">stockscout</span>
+    <span id="snapshot-info" class="muted">불러오는 중…</span>
+  </header>
+
+  <main id="layout">
+    <section id="list-panel">
+      <div id="controls">
+        <input id="search" type="search" placeholder="종목명 또는 코드 검색" autocomplete="off">
+
+        <div class="slider-row">
+          <label for="drop-threshold">하락 임계치</label>
+          <output id="drop-value">-40%</output>
+        </div>
+        <input id="drop-threshold" type="range" min="0" max="80" step="1" value="40">
+
+        <div id="score-slider-block" class="disabled-block">
+          <div class="slider-row">
+            <label>우량주 점수 최소</label>
+            <output id="score-value">—</output>
+          </div>
+          <input id="score-threshold" type="range" min="0" max="100" step="5" value="70" disabled>
+          <p class="hint" id="score-hint"></p>
+        </div>
+
+        <p id="hit-count" class="hit"></p>
+
+        <div id="chips"></div>
+        <select id="sort">
+          <option value="drop">하락률순</option>
+          <option value="name">이름순</option>
+          <option value="ticker">코드순</option>
+        </select>
+      </div>
+
+      <ul id="stock-list"></ul>
+    </section>
+
+    <section id="detail-panel">
+      <p class="placeholder">왼쪽에서 종목을 선택하세요.</p>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

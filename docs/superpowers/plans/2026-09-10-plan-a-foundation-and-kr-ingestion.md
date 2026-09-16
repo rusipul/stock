@@ -201,7 +201,31 @@ def save_snapshot(self, snapshot: Snapshot, results: list[AnalysisResult]) -> in
 
 8. **`fetch_corp_codes`는 구현·테스트돼 있지만 아무도 호출하지 않고** `securities.source_id`도 비어 있다. `fetch_annual`을 구현하는 사람이 corp_code 캐시 위치와 저장 주체를 함께 정해야 한다.
 
-### Task 8·12·16은 DART API 키를 기다린다
+### Task 8은 구현됐다 — 남은 것은 실측 검증뿐이다 (2026-09-11)
+
+DART status 코드를 고치는 작업을 하다 `fetch_annual`이 여전히 `NotImplementedError`인 것이 드러났다. 테스트를 쓰려면 메서드가 있어야 하므로 Task 8 Step 5의 코드를 그대로 구현했다. **키가 없어도 되는 부분이었다** — 키가 필요한 것은 Step 1(탐색)과 Step 2(픽스처 저장), 그리고 그 픽스처에 기대는 매핑 검증뿐이다.
+
+`tests/fixtures/dart_statement_005930_2024.json`은 **일부러 만들지 않았다.** 그 경로가 존재하면 `tests/test_kr_mapping.py`의 `skipif`가 풀려 `ACCOUNT_MAP` 검증 테스트 2개가 실행되는데, 지어낸 픽스처로 통과시키면 검증이 아니라 **검증했다는 착각**만 남는다.
+
+**Task 8에 남은 것:** `scripts/spike_dart.py statement` 로 실제 응답을 확인하고 픽스처를 저장하는 일. 그러면 Task 12의 매핑 검증이 자동으로 살아난다.
+
+### status 코드 처리를 고쳤다 (2026-09-11)
+
+사용자가 알려준 공식 개발가이드로 확인한 결과, 응답 status가 3개가 아니라 7개였다. 초기 구현이 `000`·`013`·`020`만 알고 있어서 **잘못된 인증키(`010`)가 종목 단위 오류로 처리됐다** — 42종목 전부에 "DART 오류 010"이 쌓이고 요약은 `성공 0 · 실패 42`가 된다. 키를 처음 넣는 사람이 정확히 마주칠 화면인데, 무엇이 문제인지 알려주지 않는다.
+
+`sources/base.py`에 `FatalSourceError`를 더했다. 기존 구분에 한 층이 생긴다.
+
+| 예외 | 뜻 |
+|---|---|
+| `SourceError` | 이 종목이 실패했다 |
+| `PermanentSourceError` | 이 종목이 실패했고 재시도해도 같다 |
+| `FatalSourceError` | **모든 종목이 같은 이유로 실패한다** — 배치를 멈춰야 한다 |
+
+`010`(미등록 키)·`100`(필드 값 오류)·`020`(요청 제한)이 `FatalSourceError`가 되어 `collect_market`이 즉시 중단하고 남은 종목을 보고한다. `CollectSummary`에 `abort_reason`이 생겨, 중단 메시지가 "일일 한도 소진"으로 고정되지 않고 실제 사유를 싣는다.
+
+`800`(서비스 점검 중)은 반대로 재시도 대상이다. `TRANSIENT` 튜플을 넓히지 않고 `DartServiceUnavailable(ConnectionError)`를 두어 기존 항목을 타게 했다 — 튜플에 `OSError`를 넣었다가 `PermissionError`까지 재시도하던 옛 버그를 되살릴 여지를 없앤다.
+
+### Task 12·16은 DART API 키를 기다린다
 
 Task 7은 오프라인 범위(파서 + 클라이언트 골격)만 수행했다. 실제 API를 호출하는 Step 1·7은 키가 생긴 뒤 실행한다. Task 8과 12는 삼성전자 실제 응답을 픽스처로 저장한 뒤 그에 맞춰 계정과목을 매핑하는 구조라, 키 없이는 추측이 된다.
 

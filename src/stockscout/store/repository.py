@@ -372,6 +372,25 @@ class Repository:
             row = self.conn.execute("SELECT MAX(date) AS d FROM raw_prices").fetchone()
         return date.fromisoformat(row["d"]) if row and row["d"] else None
 
+    # --- 관심종목 -----------------------------------------------------
+
+    def watchlist_tickers(self) -> set[str]:
+        rows = self.conn.execute("SELECT ticker FROM watchlist").fetchall()
+        return {r["ticker"] for r in rows}
+
+    def add_to_watchlist(self, ticker: str, memo: str | None = None) -> None:
+        """이미 있으면 아무것도 하지 않는다. 별 토글은 멱등해야 한다."""
+        self.conn.execute(
+            "INSERT INTO watchlist (ticker, added_at, memo) VALUES (?, ?, ?) "
+            "ON CONFLICT(ticker) DO NOTHING",
+            (ticker, _now(), memo),
+        )
+        self.conn.commit()
+
+    def remove_from_watchlist(self, ticker: str) -> None:
+        self.conn.execute("DELETE FROM watchlist WHERE ticker = ?", (ticker,))
+        self.conn.commit()
+
     # --- 오류 기록 ---------------------------------------------------
 
     def record_error(self, ticker: str, source: str, message: str) -> None:
