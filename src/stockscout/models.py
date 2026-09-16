@@ -248,6 +248,64 @@ class Snapshot(BaseModel):
     note: str | None = None
 
 
+# 지표 상태 (설계서 §8.2·§8.3)
+STATUS_OK = "OK"
+STATUS_MISSING = "MISSING"                            # 데이터가 없어 계산 불가
+STATUS_BASE_NEGATIVE = "BASE_NEGATIVE"                # CAGR 기저가 0 이하
+STATUS_DENOMINATOR_NONPOSITIVE = "DENOMINATOR_NONPOSITIVE"   # 3년 누계 영업이익 <= 0
+AXIS_UNMEASURABLE = "AXIS_UNMEASURABLE"               # 축 유효만점이 배점의 절반 미만
+
+AXIS_MAX = 25.0   # 축 하나의 배점. 4축 x 25 = 100점
+
+
+class MetricScore(BaseModel):
+    """지표 하나의 채점 결과. 화면이 근거를 보여줄 수 있게 원값을 함께 남긴다."""
+
+    metric: str
+    value: float | None
+    points: float
+    max_points: float
+    status: str
+
+
+class AxisScore(BaseModel):
+    """축 하나의 채점 결과.
+
+    earned/denominator를 그대로 들고 다니는 이유: 총점은 축 점수를
+    평균내는 것이 아니라 전체 획득을 전체 유효만점으로 나눈 값이다
+    (설계서 §8.3). 축에서 25점으로 환산해 버리면 그 계산을 할 수 없다.
+    """
+
+    axis: str
+    metrics: list[MetricScore]
+    earned: float
+    denominator: float
+    status: str
+    # 이 축의 배점 합. 기본값 AXIS_MAX는 4축 x 25라는 표준 배치일 뿐이고,
+    # 축을 조립하는 쪽이 설정에서 읽은 실제 배점 합으로 덮는다 - 사용자가
+    # YAML에서 배점을 바꿀 수 있기 때문이다.
+    max_points: float = AXIS_MAX
+
+    @property
+    def points(self) -> float:
+        """화면 표시용 0~배점 점수."""
+        if self.denominator <= 0:
+            return 0.0
+        return self.earned / self.denominator * self.max_points
+
+
+class ScoreCard(BaseModel):
+    axes: list[AxisScore]
+
+    @property
+    def total(self) -> float:
+        """설계서 §8.3: (획득점수 합계 / 유효만점 합계) x 100."""
+        denominator = sum(a.denominator for a in self.axes)
+        if denominator <= 0:
+            return 0.0
+        return sum(a.earned for a in self.axes) / denominator * 100
+
+
 class AnalysisResult(BaseModel):
     """한 종목의 분석 결과 한 줄.
 
