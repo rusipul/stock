@@ -248,7 +248,7 @@ class Snapshot(BaseModel):
     note: str | None = None
 
 
-# 지표 상태 (설계서 §8.2·§8.3)
+# 지표·축 상태 (설계서 §8.2·§8.3)
 STATUS_OK = "OK"
 STATUS_MISSING = "MISSING"                            # 데이터가 없어 계산 불가
 STATUS_BASE_NEGATIVE = "BASE_NEGATIVE"                # CAGR 기저가 0 이하
@@ -295,11 +295,20 @@ class AxisScore(BaseModel):
 
 
 class ScoreCard(BaseModel):
+    """한 종목의 4축 채점 결과 전체 (설계서 §8.2)."""
+
     axes: list[AxisScore]
 
     @property
     def total(self) -> float:
-        """설계서 §8.3: (획득점수 합계 / 유효만점 합계) x 100."""
+        """설계서 §8.3: (획득점수 합계 / 유효만점 합계) x 100.
+
+        축 점수를 평균내면 안 된다. 평균은 모든 축을 같은 무게로 세는데,
+        결측이 많아 유효만점이 작아진 축은 적은 근거로 매긴 점수다.
+        그것을 온전한 축과 같은 무게로 세면 **가장 모르는 축이 총점을
+        가장 많이 흔든다.** 전체 획득을 전체 유효만점으로 나누면 축의
+        무게가 실제로 잰 점수에 비례한다.
+        """
         denominator = sum(a.denominator for a in self.axes)
         if denominator <= 0:
             return 0.0
