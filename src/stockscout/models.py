@@ -85,6 +85,12 @@ class Financials(BaseModel):
     capex: float | None = None          # 양수 크기로 저장한다
     shares_outstanding: float | None = None
     dividend_per_share: float | None = None
+    shares_treasury: float | None = None      # 자기주식수 (설계서 §9.2)
+    audit_opinion: str | None = None          # '적정' 등 원문 (설계서 §8.1)
+
+    # 정확한 계정을 못 찾아 대체 계정으로 채운 필드 이름들 (설계서 §17.3).
+    # 이자보상배율을 금융비용으로 계산했다면 판정 근거가 그렇게 말해야 한다.
+    proxy_fields: list[str] = []
 
     # --- 결측 추적 ---------------------------------------------------
 

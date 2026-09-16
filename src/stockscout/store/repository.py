@@ -207,14 +207,16 @@ class Repository:
         "net_income", "total_assets", "total_liabilities", "total_equity",
         "current_assets", "current_liabilities", "interest_expense",
         "operating_cash_flow", "capex", "shares_outstanding", "dividend_per_share",
+        "shares_treasury", "audit_opinion",
     )
 
     def save_financials(self, records: list[Financials]) -> None:
-        cols = ", ".join(self._FIN_COLUMNS) + ", missing_fields"
-        placeholders = ", ".join("?" * (len(self._FIN_COLUMNS) + 1))
+        extra = ("missing_fields", "proxy_fields")
+        cols = ", ".join(self._FIN_COLUMNS + extra)
+        placeholders = ", ".join("?" * (len(self._FIN_COLUMNS) + len(extra)))
         updates = ", ".join(
-            f"{c}=excluded.{c}" for c in self._FIN_COLUMNS[2:]
-        ) + ", missing_fields=excluded.missing_fields"
+            f"{c}=excluded.{c}" for c in self._FIN_COLUMNS[2:] + extra
+        )
         self.conn.executemany(
             f"""
             INSERT INTO financials ({cols}) VALUES ({placeholders})
@@ -222,7 +224,10 @@ class Repository:
             """,
             [
                 tuple(getattr(r, c) for c in self._FIN_COLUMNS)
-                + (json.dumps(r.missing_fields, ensure_ascii=False),)
+                + (
+                    json.dumps(r.missing_fields, ensure_ascii=False),
+                    json.dumps(r.proxy_fields, ensure_ascii=False),
+                )
                 for r in records
             ],
         )
@@ -234,7 +239,12 @@ class Repository:
             (ticker,),
         ).fetchall()
         return [
-            Financials(**{c: row[c] for c in self._FIN_COLUMNS}) for row in rows
+            Financials(
+                **{c: row[c] for c in self._FIN_COLUMNS},
+                # 계획 C 이전 행은 이 컬럼이 NULL이다. json.loads(None)은 터진다.
+                proxy_fields=json.loads(row["proxy_fields"] or "[]"),
+            )
+            for row in rows
         ]
 
     def missing_field_counts(self) -> dict[str, int]:

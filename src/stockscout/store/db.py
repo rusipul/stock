@@ -30,6 +30,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     """스키마를 적용한다. 여러 번 호출해도 안전하다(CREATE TABLE IF NOT EXISTS)."""
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     _add_snapshots_as_of_column_if_missing(conn)
+    _add_financials_columns_if_missing(conn)
     conn.commit()
 
 
@@ -47,3 +48,20 @@ def _add_snapshots_as_of_column_if_missing(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)")}
     if "as_of" not in columns:
         conn.execute("ALTER TABLE snapshots ADD COLUMN as_of TEXT")
+
+
+def _add_financials_columns_if_missing(conn: sqlite3.Connection) -> None:
+    """계획 C가 더한 컬럼을 기존 DB에 얹는다.
+
+    data/stockscout.db에는 몇 분 걸려 받은 실제 데이터가 들어 있다.
+    스키마가 바뀔 때마다 다시 받을 수는 없다.
+    _add_snapshots_as_of_column_if_missing과 같은 패턴이다.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(financials)")}
+    for name, sql_type in (
+        ("shares_treasury", "REAL"),
+        ("audit_opinion", "TEXT"),
+        ("proxy_fields", "TEXT"),
+    ):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE financials ADD COLUMN {name} {sql_type}")

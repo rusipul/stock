@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS financials (
   capex               REAL,
   shares_outstanding  REAL,
   dividend_per_share  REAL,
+  shares_treasury     REAL,
+  audit_opinion       TEXT,
+  proxy_fields        TEXT,
   missing_fields      TEXT,
   PRIMARY KEY (ticker, fiscal_year)
 );

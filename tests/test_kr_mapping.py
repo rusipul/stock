@@ -4,7 +4,12 @@ from pathlib import Path
 import pytest
 
 from stockscout.models import RawStatement
-from stockscout.normalize.kr_mapping import BLANK_AMOUNTS, normalize_dart_statement, pick_amount
+from stockscout.normalize.kr_mapping import (
+    BLANK_AMOUNTS,
+    normalize_dart_statement,
+    pick_amount,
+    pick_tiered,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "dart_statement_005930_2024.json"
 
@@ -148,3 +153,77 @@ def test_blank_amounts_has_four_distinct_markers():
     assert "-" in BLANK_AMOUNTS
     assert "－" in BLANK_AMOUNTS  # U+FF0D FULLWIDTH HYPHEN-MINUS ('－')
     assert "-" != "－"
+
+
+def test_tier_one_wins_even_when_tier_two_has_a_standard_id():
+    """진짜 이자비용이 이름으로만 있어도 금융비용에 지지 않아야 한다.
+
+    실측 13건이 이 모양이다 (LG생활건강·한국전력·삼성에스디에스).
+    pick_amount은 모든 id를 이름보다 먼저 보므로, FinanceCosts를 그냥
+    id 목록에 넣으면 이 회사들이 전부 틀린 값을 쓰게 된다.
+    """
+    items = [
+        item("IS", "-표준계정코드 미사용-", "이자비용", "100"),
+        item("IS", "ifrs-full_FinanceCosts", "금융비용", "900"),
+    ]
+
+    value, tier = pick_tiered(items, [
+        (["ifrs-full_InterestExpense"], ["이자비용"]),
+        (["ifrs-full_FinanceCosts"], ["금융비용"]),
+    ])
+
+    assert value == 100.0
+    assert tier == 0
+
+
+def test_tier_two_is_used_when_tier_one_is_absent():
+    items = [item("IS", "ifrs-full_FinanceCosts", "금융비용", "900")]
+
+    value, tier = pick_tiered(items, [
+        (["ifrs-full_InterestExpense"], ["이자비용"]),
+        (["ifrs-full_FinanceCosts"], ["금융비용"]),
+    ])
+
+    assert value == 900.0
+    assert tier == 1
+
+
+def test_pick_tiered_returns_none_when_no_tier_matches():
+    assert pick_tiered([item("IS", "x", "엉뚱한계정", "5")], [(["a"], ["b"])]) == (None, None)
+
+
+def test_normalize_records_which_fields_used_a_fallback():
+    """대체값을 썼다는 사실이 남아야 판정 근거에 드러낼 수 있다."""
+    stmt = RawStatement(
+        ticker="051900.KS", fiscal_year=2024, source="dart",
+        payload={"list": [
+            item("IS", "ifrs-full_Revenue", "매출액", "300,000"),
+            item("IS", "dart_OperatingIncomeLoss", "영업이익", "30,000"),
+            item("BS", "ifrs-full_Liabilities", "부채총계", "60,000"),
+            item("BS", "ifrs-full_Equity", "자본총계", "200,000"),
+            item("IS", "ifrs-full_FinanceCosts", "금융비용", "900"),
+        ]},
+    )
+
+    fin = normalize_dart_statement(stmt)
+
+    assert fin.interest_expense == 900.0
+    assert fin.proxy_fields == ["interest_expense"]
+
+
+def test_normalize_leaves_proxy_fields_empty_for_exact_matches():
+    stmt = RawStatement(
+        ticker="005930.KS", fiscal_year=2024, source="dart",
+        payload={"list": [
+            item("IS", "ifrs-full_Revenue", "매출액", "300,000"),
+            item("IS", "dart_OperatingIncomeLoss", "영업이익", "30,000"),
+            item("BS", "ifrs-full_Liabilities", "부채총계", "60,000"),
+            item("BS", "ifrs-full_Equity", "자본총계", "200,000"),
+            item("IS", "ifrs-full_InterestExpense", "이자비용", "700"),
+        ]},
+    )
+
+    fin = normalize_dart_statement(stmt)
+
+    assert fin.interest_expense == 700.0
+    assert fin.proxy_fields == []
