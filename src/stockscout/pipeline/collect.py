@@ -7,6 +7,7 @@ from datetime import date
 from pydantic import BaseModel
 
 from stockscout.sources.base import FatalSourceError, FundamentalSource, PriceSource
+from stockscout.sources.dart import SOURCE_SHARES
 from stockscout.sources.ratelimit import DailyQuotaExceeded
 from stockscout.store.repository import Repository
 
@@ -29,6 +30,7 @@ class CollectSummary(BaseModel):
     succeeded: int = 0
     failed: int = 0
     statements: int = 0
+    shares: int = 0
     price_bars: int = 0
     aborted: bool = False
     abort_reason: str | None = None
@@ -37,7 +39,8 @@ class CollectSummary(BaseModel):
     def render(self) -> str:
         lines = [
             f"대상 {self.total}종목 · 성공 {self.succeeded} · 실패 {self.failed}",
-            f"재무제표 {self.statements}건 · 주가 {self.price_bars}봉 저장",
+            f"재무제표 {self.statements}건 · 주식수 {self.shares}건 "
+            f"· 주가 {self.price_bars}봉 저장",
         ]
         if self.aborted:
             # 중단 사유는 늘 일일 한도 소진이 아니다 (예: 등록되지 않은 API
@@ -113,6 +116,24 @@ def collect_market(
             repo.record_error(ticker, fundamentals.name, f"{type(exc).__name__}: {exc}")
             ticker_failed = True
 
+        # 재무제표와 별개의 try. 주식수 수집이 실패해도 재무제표와 주가는
+        # 남아야 한다 — 계획 A의 결함 C2가 정확히 이 실수였다(두 수집을 한
+        # try에 묶었더니 DART 실패가 주가 5년치를 통째로 날렸다).
+        if not aborted:
+            try:
+                summary.shares += _collect_optional(
+                    repo, ticker, fundamentals, "fetch_shares",
+                    SOURCE_SHARES, years, force,
+                )
+            except ABORTING_ERRORS as exc:
+                repo.record_error(ticker, SOURCE_SHARES, str(exc))
+                summary.abort_reason = str(exc)
+                aborted = True
+            except Exception as exc:  # 종목 단위 격리 (설계서 §13)
+                repo.record_error(ticker, SOURCE_SHARES,
+                                  f"{type(exc).__name__}: {exc}")
+                ticker_failed = True
+
         # 재무제표 수집과 별개의 try. DART(fundamentals)가 실패해도
         # pykrx(prices)는 독립 소스이므로 계속 시도해야 한다 — 그렇지 않으면
         # "corp_code를 찾을 수 없습니다" 같은 정상적으로 발생하는 DART 실패가
@@ -160,6 +181,39 @@ def _collect_statements(
         return 0
 
     statements = source.fetch_annual(ticker, wanted)
+    if statements:
+        repo.save_raw_statements(statements)
+    return len(statements)
+
+
+def _collect_optional(
+    repo: Repository,
+    ticker: str,
+    source: FundamentalSource,
+    method: str,
+    raw_source: str,
+    years: list[int],
+    force: bool,
+) -> int:
+    """소스가 선택적으로 제공하는 공시를 수집한다 (주식수·감사의견).
+
+    메서드가 없으면 0을 돌려준다. DART에만 있는 엔드포인트라서, 앞으로
+    붙일 EDGAR 소스는 이 메서드를 갖지 않는다 — 프로토콜을 넓혀 모든
+    소스가 빈 구현을 갖게 하는 것보다 낫다.
+    """
+    fetch = getattr(source, method, None)
+    if fetch is None:
+        return 0
+    if not years:
+        return 0
+    wanted = list(years)
+    if not force:
+        have = repo.existing_statement_years(ticker, raw_source)
+        wanted = [y for y in years if y not in have]
+    if not wanted:
+        return 0
+
+    statements = fetch(ticker, wanted)
     if statements:
         repo.save_raw_statements(statements)
     return len(statements)

@@ -151,3 +151,82 @@ def normalize_dart_statement(stmt: RawStatement) -> Financials:
         proxy_fields=proxies,
         **values,
     )
+
+
+# stockTotqySttus.json의 se(구분)는 자유 문자열이라 회사마다 다르게 쓴다.
+# KOSPI 42종목 210건에서 실제로 온 표기가 27가지였고, 그중 보통주를 뜻하는
+# 것만 9가지다('보통주' · '보통주식' · '의결권 있는 보통주' · '의결권 있는
+# 주식' · '의결권이 있는\n주식(보통주)' …). 공백뿐 아니라 줄바꿈이 문자열
+# 한가운데 박혀 오기도 한다.
+#
+# 그래서 정확 일치가 아니라 공백·줄바꿈을 모두 지운 뒤 부분 문자열로 본다.
+# 정확 일치로 '보통주'만 찾던 때에는 196행 중 25행(7종목)이 합계 행으로
+# 폴백했고, 합계는 우선주를 포함하므로 시가총액이 부풀려졌다 —
+# 기업은행 +7.1%, 삼성전기 +3.9%, 신한지주 +3.4% (설계서 §17.4).
+SE_COMMON_MARKERS = ("보통주",)          # '보통주식', '…주식(보통주)'까지 잡힌다
+SE_VOTING_MARKERS = ("의결권있는", "의결권이있는")  # 의결권 있는 주식 = 보통주
+SE_PREFERRED_MARKER = "우선"             # 우선주·배당우선주식·제1종 우선주 …
+SE_TOTAL_MARKER = "합계"
+
+# 낮을수록 먼저 쓴다.
+TIER_COMMON = 0    # 보통주라고 이름 붙은 행
+TIER_VOTING = 1    # 의결권으로만 구분한 행 (기업은행은 '보통주'를 안 쓴다)
+TIER_TOTAL = 2     # 최후 폴백. 우선주를 포함하지만 NULL보다는 낫다
+
+
+def _share_row_tier(se: str | None) -> int | None:
+    """se(구분) 표기 → 우선순위 단계. 발행주식총수로 쓸 수 없으면 None.
+
+    '우선'이 들어 있으면 의결권 표기가 있어도 보통주로 보지 않는다.
+    지금 실측 데이터에 '의결권 있는 우선주'는 없지만 실재하는 증권이고,
+    한 번 들어오면 조용히 틀린 시가총액이 나가기 때문이다. '종류주'처럼
+    어디에도 걸리지 않는 표기는 None이 되어 그냥 무시된다 — 보통주가
+    아닌 행을 발행주식총수로 쓰는 것보다 합계로 폴백하는 편이 낫다.
+    """
+    key = "".join((se or "").split())   # 공백·줄바꿈·탭을 모두 제거한다
+    # 합계를 우선 가드보다 먼저 본다. 뒤로 내리면 '합계(보통주+우선주)'처럼
+    # 우선주를 언급하는 표기가 None이 되어 최후 폴백 자체가 사라진다 —
+    # 지금 실측 데이터는 순수 '합계'뿐이라 순서를 바꿔도 테스트가 다 통과한다.
+    if SE_TOTAL_MARKER in key:
+        return TIER_TOTAL
+    if SE_PREFERRED_MARKER in key:
+        return None
+    if any(marker in key for marker in SE_COMMON_MARKERS):
+        return TIER_COMMON
+    if any(marker in key for marker in SE_VOTING_MARKERS):
+        return TIER_VOTING
+    return None
+
+
+def parse_share_counts(payload: dict) -> tuple[float | None, float | None]:
+    """주식의 총수 현황 → (발행주식총수, 자기주식수).
+
+    se가 보통주/우선주/합계/비고 4행으로 오되 표기는 회사마다 다르다.
+    비고 행은 어느 단계에도 걸리지 않고, 설령 걸려도 수량이 '-'라
+    _parse_amount가 None을 돌려주므로 두 겹으로 걸러진다.
+    """
+    rows = payload.get("list", []) or []
+    best: dict[int, dict] = {}
+    for row in rows:
+        tier = _share_row_tier(row.get("se"))
+        if tier is not None:
+            best.setdefault(tier, row)   # 같은 단계가 여럿이면 첫 행을 쓴다
+
+    for tier in (TIER_COMMON, TIER_VOTING, TIER_TOTAL):
+        row = best.get(tier)
+        if row is None:
+            continue
+        issued = _parse_amount(row.get("istc_totqy"))
+        if issued is None:
+            continue
+        return issued, _parse_amount(row.get("tesstk_co"))
+    return None, None
+
+
+def apply_share_counts(fin: Financials, payload: dict) -> None:
+    """주식수 원본을 이미 만들어진 Financials 위에 얹는다."""
+    issued, treasury = parse_share_counts(payload)
+    if issued is not None:
+        fin.shares_outstanding = issued
+    if treasury is not None:
+        fin.shares_treasury = treasury

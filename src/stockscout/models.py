@@ -32,7 +32,7 @@ class RawStatement(BaseModel):
 
     ticker: str
     fiscal_year: int
-    source: str          # 'dart' | 'edgar'
+    source: str          # 'dart' | 'dart_shares' | 'edgar'
     payload: dict
 
 
