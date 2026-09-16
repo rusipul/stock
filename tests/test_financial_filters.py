@@ -176,9 +176,10 @@ def test_all_failures_are_collected_not_just_the_first():
 
     failures = apply_financial_filters(years, CONFIG).failures
 
-    assert CAPITAL_IMPAIRED in failures
-    assert ADVERSE_AUDIT_OPINION in failures
-    assert len(failures) >= 2
+    # 정확한 집합으로 단언한다. `len(failures) >= 2`로 두면 사유가 하나
+    # 더 붙어도(예: 자본잠식 기업에 HIGH_DEBT가 겹쳐 붙어도) 통과한다 —
+    # 모으는 것은 확인하면서 *무엇을* 모았는지는 놓치는 단언이었다.
+    assert set(failures) == {CAPITAL_IMPAIRED, ADVERSE_AUDIT_OPINION}
 
 
 def test_financials_may_arrive_unsorted():
@@ -257,3 +258,153 @@ def test_one_proxy_year_in_the_window_skips_the_filter():
     )
 
     assert INTEREST_UNCOVERED not in apply_financial_filters(years, CONFIG).failures
+
+
+# --- 경계·설정 준수 (명세 준수 검토에서 드러난 빈 구멍) -----------------
+
+
+def test_equity_of_exactly_zero_is_capital_impairment():
+    """자본이 정확히 0인 회사. `<= 0`의 등호가 살아 있는지 본다.
+
+    등호를 잃으면 이 회사는 하드필터를 *전부* 통과한다. debt_ratio도
+    자본이 0이면 None이라 HIGH_DEBT가 대신 잡아 주지 못하기 때문이다.
+    자본잠식 경계선에 선 회사가 그대로 점수판에 올라온다.
+    """
+    years = five_years()
+    years[-1] = fin(2025, total_equity=0.0)
+
+    failures = apply_financial_filters(years, CONFIG).failures
+
+    # 사유가 이것 하나뿐이라는 것이 요점이다 — 받쳐 주는 그물이 없다.
+    assert failures == [CAPITAL_IMPAIRED]
+
+
+def test_one_bad_year_does_not_trigger_interest_uncovered():
+    """설계서 §8.1은 '최근 2년 *모두* 배율 < 1'을 요구한다.
+
+    all을 any로 바꾸면 한 해 삐끗한 경기순환 기업이 통째로 탈락한다.
+    """
+    years = five_years()
+    years[-2] = fin(years[-2].fiscal_year, operating_income=100.0, interest_expense=10.0)  # 10배
+    years[-1] = fin(years[-1].fiscal_year, operating_income=5.0, interest_expense=10.0)    # 0.5배
+
+    assert INTEREST_UNCOVERED not in apply_financial_filters(years, CONFIG).failures
+
+
+def test_capital_impairment_does_not_also_report_high_debt():
+    """자본잠식 기업에 HIGH_DEBT를 겹쳐 붙이지 않는다.
+
+    부채비율은 자본이 0 이하면 정의되지 않는다(debt_ratio가 None). 그 상태를
+    '부채비율이 높다'로 보고하면 화면의 제외 사유가 틀린다 — 부채가 많아서가
+    아니라 자본이 없어서인데 사용자는 문제가 둘이라고 읽는다.
+    """
+    years = five_years()
+    years[-1] = fin(2025, total_equity=-10.0, total_liabilities=5_000.0)
+
+    failures = apply_financial_filters(years, CONFIG).failures
+
+    assert CAPITAL_IMPAIRED in failures
+    assert HIGH_DEBT not in failures
+
+
+def _years_with_revenue(revenues):
+    """2021~2025 다섯 해에 연도별로 다른 매출을 심는다.
+
+    매출이 모든 해 같은 픽스처로는 '어느 해를 기준으로 재는가'를 검증할 수
+    없다 — 기준 연도가 바뀌어도 같은 값이 나오기 때문이다.
+    """
+    return [fin(2021 + i, revenue=r) for i, r in enumerate(revenues)]
+
+
+def test_revenue_collapse_is_measured_against_three_years_back():
+    """기준은 3년 전(2022)이지 2년 전(2023)이 아니다."""
+    #                              2021  2022   2023  2024  2025
+    years = _years_with_revenue([2_000, 1_000, 600, 550, 500])
+
+    # 2022년 1,000 대비 2025년 500 → -50%. 임계치 이하다.
+    # 2023년 600을 기준으로 재면 -16.7%에 그쳐 걸리지 않는다.
+    assert REVENUE_COLLAPSE in apply_financial_filters(years, CONFIG).failures
+
+
+def test_recent_two_year_drop_alone_is_not_revenue_collapse():
+    """3년 전 대비로는 오히려 늘었다면 급감이 아니다.
+
+    앞 테스트의 반대 방향이다. 둘이 함께 기준 연도를 양쪽에서 고정한다.
+    """
+    #                              2021   2022  2023   2024   2025
+    years = _years_with_revenue([1_000, 400, 1_000, 1_000, 500])
+
+    # 2022년 400 대비 2025년 500 → +25%. 2년 전(2023) 1,000 대비로만 -50%다.
+    assert REVENUE_COLLAPSE not in apply_financial_filters(years, CONFIG).failures
+
+
+# --- 설계서 §1: "기준은 코드가 아니라 설정이다" -------------------------
+#
+# 임계치를 코드에 하드코딩하는 변이가 전부 살아남는 것을 명세 준수 검토가
+# 잡아냈다. 모든 테스트가 HardFilterConfig() 기본값만 썼기 때문이다. 원칙을
+# 지키는 테스트가 하나도 없으면 그것은 원칙이 아니라 희망이다. 아래는
+# HardFilterConfig의 여섯 필드가 *전부* 판정에 실제로 도달하는지 본다.
+# 각 테스트는 같은 재무제표를 기본 설정과 바꾼 설정에 각각 통과시켜,
+# 판정이 재무가 아니라 설정을 따라 갈리는 것을 보인다.
+
+
+def test_max_debt_ratio_comes_from_config():
+    years = five_years()
+    years[-1] = fin(2025, total_liabilities=1_500.0, total_equity=1_000.0)  # 150%
+
+    assert HIGH_DEBT not in apply_financial_filters(years, CONFIG).failures
+    assert HIGH_DEBT in apply_financial_filters(
+        years, HardFilterConfig(max_debt_ratio=100.0)
+    ).failures
+
+
+def test_consecutive_operating_loss_years_comes_from_config():
+    years = five_years()
+    for i in (-2, -1):
+        years[i] = fin(years[i].fiscal_year, operating_income=-5.0)   # 2년 연속 적자
+
+    assert CONSECUTIVE_LOSS not in apply_financial_filters(years, CONFIG).failures
+    assert CONSECUTIVE_LOSS in apply_financial_filters(
+        years, HardFilterConfig(consecutive_operating_loss_years=2)
+    ).failures
+
+
+def test_min_history_years_comes_from_config():
+    years = [fin(y) for y in (2022, 2023, 2024, 2025)]   # 4개년
+
+    assert INSUFFICIENT_HISTORY in apply_financial_filters(years, CONFIG).failures
+    assert INSUFFICIENT_HISTORY not in apply_financial_filters(
+        years, HardFilterConfig(min_history_years=3)
+    ).failures
+
+
+def test_min_interest_coverage_comes_from_config():
+    years = five_years()
+    for i in (-2, -1):
+        years[i] = fin(years[i].fiscal_year, operating_income=20.0, interest_expense=10.0)  # 2배
+
+    assert INTEREST_UNCOVERED not in apply_financial_filters(years, CONFIG).failures
+    assert INTEREST_UNCOVERED in apply_financial_filters(
+        years, HardFilterConfig(min_interest_coverage=3.0)
+    ).failures
+
+
+def test_interest_coverage_years_comes_from_config():
+    years = five_years()
+    years[-2] = fin(years[-2].fiscal_year, operating_income=100.0, interest_expense=10.0)  # 10배
+    years[-1] = fin(years[-1].fiscal_year, operating_income=5.0, interest_expense=10.0)    # 0.5배
+
+    assert INTEREST_UNCOVERED not in apply_financial_filters(years, CONFIG).failures
+    assert INTEREST_UNCOVERED in apply_financial_filters(
+        years, HardFilterConfig(interest_coverage_years=1)
+    ).failures
+
+
+def test_max_revenue_decline_3y_comes_from_config():
+    #                              2021   2022   2023  2024  2025
+    years = _years_with_revenue([1_000, 1_000, 900, 800, 700])   # 3년 전 대비 -30%
+
+    assert REVENUE_COLLAPSE not in apply_financial_filters(years, CONFIG).failures
+    assert REVENUE_COLLAPSE in apply_financial_filters(
+        years, HardFilterConfig(max_revenue_decline_3y=-0.2)
+    ).failures
