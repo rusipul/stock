@@ -29,8 +29,14 @@ def fin(year, **kwargs):
     return Financials(**base)
 
 
-def five_years(**kwargs):
-    return [fin(y, **kwargs) for y in range(2021, 2026)]
+def five_years():
+    """정상 재무 다섯 해(2021~2025). 바꿀 해는 호출한 쪽에서 교체한다.
+
+    일괄 수정용 **kwargs를 두지 않는 것은 의도다 — 매출 급감 필터의 기준
+    연도까지 같은 값으로 덮어 '어느 해를 기준으로 재는가'를 검증할 수 없게
+    만든다.
+    """
+    return [fin(y) for y in range(2021, 2026)]
 
 
 CONFIG = HardFilterConfig()
