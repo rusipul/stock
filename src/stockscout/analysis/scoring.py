@@ -8,6 +8,24 @@
 from __future__ import annotations
 
 from stockscout.config import MetricConfig
+from stockscout.models import (
+    Financials,
+    MetricScore,
+    STATUS_BASE_NEGATIVE,
+    STATUS_DENOMINATOR_NONPOSITIVE,
+    STATUS_MISSING,
+    STATUS_OK,
+)
+
+CAGR_YEARS = 3               # 설계서 §8.2의 "3년 CAGR"
+AVG_YEARS = 3                # "3년 평균"
+TREND_YEARS = 3              # "최근 3년 추세"
+CONSISTENCY_COMPARISONS = 4  # "최근 4년 중 증가한 해"
+STREAK_YEARS = 5             # 흑자 연속년수를 세는 최대 구간
+MIN_AVG_YEARS = 2            # 평균을 낼 최소 표본
+MIN_CONSISTENCY_COMPARISONS = 3
+TREND_FLAT_BAND = 0.5        # %p/년. 이 안쪽은 보합으로 본다
+TREND_FLAT_POINTS_RATIO = 0.4  # 보합은 배점의 40% (5점 중 2점)
 
 
 def band_score(value: float, metric: MetricConfig) -> float:
@@ -24,3 +42,181 @@ def band_score(value: float, metric: MetricConfig) -> float:
         elif value >= threshold:
             return points
     return 0.0
+
+
+def _missing(name: str, cfg: MetricConfig) -> MetricScore:
+    return MetricScore(metric=name, value=None, points=0.0,
+                       max_points=cfg.points, status=STATUS_MISSING)
+
+
+def _scored(name: str, value: float, cfg: MetricConfig,
+            points: float | None = None, status: str = STATUS_OK) -> MetricScore:
+    return MetricScore(
+        metric=name, value=value,
+        points=band_score(value, cfg) if points is None else points,
+        max_points=cfg.points, status=status,
+    )
+
+
+def _latest(years: list[Financials]) -> Financials | None:
+    return years[-1] if years else None
+
+
+# --- 수익성 ---------------------------------------------------------
+
+def metric_roe_avg3(years: list[Financials], cfg: MetricConfig) -> MetricScore:
+    values = [f.roe for f in years[-AVG_YEARS:] if f.roe is not None]
+    if len(values) < MIN_AVG_YEARS:
+        return _missing("roe_avg3", cfg)
+    return _scored("roe_avg3", sum(values) / len(values), cfg)
+
+
+def metric_op_margin_avg3(years: list[Financials], cfg: MetricConfig) -> MetricScore:
+    values = [f.operating_margin for f in years[-AVG_YEARS:]
+              if f.operating_margin is not None]
+    if len(values) < MIN_AVG_YEARS:
+        return _missing("op_margin_avg3", cfg)
+    return _scored("op_margin_avg3", sum(values) / len(values), cfg)
+
+
+def metric_op_margin_trend(years: list[Financials], cfg: MetricConfig) -> MetricScore:
+    """최근 3년 영업이익률의 선형회귀 기울기 (연당 %p).
+
+    bands를 쓰지 않는다. 설계서 §8.2가 보합 구간을 따로 정의하기 때문에
+    구간표로 표현되지 않는다.
+    """
+    margins = [f.operating_margin for f in years[-TREND_YEARS:]]
+    if len(margins) < TREND_YEARS or any(m is None for m in margins):
+        return _missing("op_margin_trend", cfg)
+
+    n = len(margins)
+    mean_x = (n - 1) / 2
+    mean_y = sum(margins) / n
+    numerator = sum((i - mean_x) * (m - mean_y) for i, m in enumerate(margins))
+    denominator = sum((i - mean_x) ** 2 for i in range(n))
+    slope_pp = numerator / denominator * 100   # 비율 -> %p
+
+    if slope_pp > TREND_FLAT_BAND:
+        points = cfg.points
+    elif slope_pp >= -TREND_FLAT_BAND:
+        points = cfg.points * TREND_FLAT_POINTS_RATIO
+    else:
+        points = 0.0
+    return _scored("op_margin_trend", slope_pp, cfg, points=points)
+
+
+# --- 성장성 ---------------------------------------------------------
+
+def _cagr(years: list[Financials], field: str, name: str,
+          cfg: MetricConfig) -> MetricScore:
+    if len(years) <= CAGR_YEARS:
+        return _missing(name, cfg)
+    base = getattr(years[-1 - CAGR_YEARS], field)
+    now = getattr(years[-1], field)
+    if base is None or now is None:
+        return _missing(name, cfg)
+    if base <= 0:
+        # 기저가 음수·0이면 CAGR이 정의되지 않는다. 0점 처리하되 유효만점에는
+        # 남긴다 - 3년 전 적자는 데이터 공백이 아니라 사업 사실이다.
+        return MetricScore(metric=name, value=None, points=0.0,
+                           max_points=cfg.points, status=STATUS_BASE_NEGATIVE)
+    return _scored(name, (now / base) ** (1 / CAGR_YEARS) - 1, cfg)
+
+
+def metric_revenue_cagr3(years: list[Financials], cfg: MetricConfig) -> MetricScore:
+    return _cagr(years, "revenue", "revenue_cagr3", cfg)
+
+
+def metric_op_income_cagr3(years: list[Financials], cfg: MetricConfig) -> MetricScore:
+    return _cagr(years, "operating_income", "op_income_cagr3", cfg)
+
+
+def metric_growth_consistency(years: list[Financials],
+                              cfg: MetricConfig) -> MetricScore:
+    """최근 4년 중 매출이 전년 대비 증가한 해의 비율.
+
+    설계서 §8.2는 "증가한 해의 수 x 1.25"라고 쓰지만, 비교 가능한 해가
+    4년보다 적을 수 있으므로 비율로 계산해 배점을 곱한다. 4년이 전부
+    있으면 결과가 같다.
+    """
+    window = years[-(CONSISTENCY_COMPARISONS + 1):]
+    pairs = [
+        (prev.revenue, curr.revenue)
+        for prev, curr in zip(window, window[1:])
+        if prev.revenue is not None and curr.revenue is not None
+    ]
+    if len(pairs) < MIN_CONSISTENCY_COMPARISONS:
+        return _missing("growth_consistency", cfg)
+    ratio = sum(1 for prev, curr in pairs if curr > prev) / len(pairs)
+    return _scored("growth_consistency", ratio, cfg, points=ratio * cfg.points)
+
+
+# --- 안정성 ---------------------------------------------------------
+
+def metric_debt_ratio(years: list[Financials], cfg: MetricConfig) -> MetricScore:
+    latest = _latest(years)
+    if latest is None or latest.debt_ratio is None:
+        return _missing("debt_ratio", cfg)
+    return _scored("debt_ratio", latest.debt_ratio, cfg)
+
+
+def metric_current_ratio(years: list[Financials], cfg: MetricConfig) -> MetricScore:
+    latest = _latest(years)
+    if latest is None or latest.current_ratio is None:
+        return _missing("current_ratio", cfg)
+    return _scored("current_ratio", latest.current_ratio, cfg)
+
+
+def metric_interest_coverage(years: list[Financials],
+                             cfg: MetricConfig) -> MetricScore:
+    latest = _latest(years)
+    if latest is None or latest.interest_coverage is None:
+        return _missing("interest_coverage", cfg)
+    # interest_coverage는 이자비용이 0이면 inf다. band_score가 첫 구간을
+    # 집으므로 자연히 만점이 된다.
+    return _scored("interest_coverage", latest.interest_coverage, cfg)
+
+
+# --- 현금흐름 -------------------------------------------------------
+
+def _positive_streak(values: list[float | None]) -> int:
+    """뒤에서부터 연속으로 0보다 큰 값의 개수. None을 만나면 멈춘다."""
+    streak = 0
+    for value in reversed(values):
+        if value is None or value <= 0:
+            break
+        streak += 1
+    return streak
+
+
+def metric_ocf_positive_years(years: list[Financials],
+                              cfg: MetricConfig) -> MetricScore:
+    window = years[-STREAK_YEARS:]
+    if all(f.operating_cash_flow is None for f in window):
+        return _missing("ocf_positive_years", cfg)
+    streak = _positive_streak([f.operating_cash_flow for f in window])
+    return _scored("ocf_positive_years", float(streak), cfg)
+
+
+def metric_ocf_to_op_income(years: list[Financials],
+                            cfg: MetricConfig) -> MetricScore:
+    window = years[-AVG_YEARS:]
+    ocf = [f.operating_cash_flow for f in window]
+    op = [f.operating_income for f in window]
+    if len(window) < AVG_YEARS or any(v is None for v in ocf + op):
+        return _missing("ocf_to_op_income", cfg)
+    denominator = sum(op)
+    if denominator <= 0:
+        return MetricScore(metric="ocf_to_op_income", value=None, points=0.0,
+                           max_points=cfg.points,
+                           status=STATUS_DENOMINATOR_NONPOSITIVE)
+    return _scored("ocf_to_op_income", sum(ocf) / denominator, cfg)
+
+
+def metric_fcf_positive_years(years: list[Financials],
+                              cfg: MetricConfig) -> MetricScore:
+    window = years[-STREAK_YEARS:]
+    if all(f.free_cash_flow is None for f in window):
+        return _missing("fcf_positive_years", cfg)
+    streak = _positive_streak([f.free_cash_flow for f in window])
+    return _scored("fcf_positive_years", float(streak), cfg)
