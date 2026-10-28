@@ -21,6 +21,7 @@ from stockscout.models import (
     Financials,
     STATUS_BASE_NEGATIVE,
     STATUS_DENOMINATOR_NONPOSITIVE,
+    STATUS_END_NONPOSITIVE,
     STATUS_MISSING,
     STATUS_OK,
 )
@@ -164,6 +165,25 @@ def test_cagr_base_of_exactly_zero_is_base_negative():
     years[-4] = fin(years[-4].fiscal_year, revenue=0.0)
 
     assert metric_revenue_cagr3(years, TEN).status == STATUS_BASE_NEGATIVE
+
+
+def test_cagr_with_a_loss_now_scores_zero_but_keeps_its_points():
+    """실측: 삼성SDI 영업이익 2022 1.81조 -> 2025 -1.72조.
+
+    음수의 세제곱근을 ** (1/3)으로 구하면 파이썬은 복소수를 돌려주고,
+    구간 비교에서 TypeError로 종목 전체의 분석이 죽는다. 흑자에서
+    적자로 돌아선 것은 사업 사실이므로 BASE_NEGATIVE처럼 0점이되 만점에는
+    남긴다.
+    """
+    years = five_years()
+    years[-1] = fin(years[-1].fiscal_year, operating_income=-50.0)
+
+    score = metric_op_income_cagr3(years, TEN)
+
+    assert score.status == STATUS_END_NONPOSITIVE
+    assert score.value is None
+    assert score.points == 0
+    assert score.max_points == 10
 
 
 def test_growth_consistency_counts_rising_years():

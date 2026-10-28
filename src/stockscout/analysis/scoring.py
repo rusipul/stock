@@ -16,6 +16,7 @@ from stockscout.models import (
     ScoreCard,
     STATUS_BASE_NEGATIVE,
     STATUS_DENOMINATOR_NONPOSITIVE,
+    STATUS_END_NONPOSITIVE,
     STATUS_MISSING,
     STATUS_OK,
 )
@@ -123,6 +124,12 @@ def _cagr(years: list[Financials], field: str, name: str,
         # 남긴다 - 3년 전 적자는 데이터 공백이 아니라 사업 사실이다.
         return MetricScore(metric=name, value=None, points=0.0,
                            max_points=cfg.points, status=STATUS_BASE_NEGATIVE)
+    if now <= 0:
+        # 흑자에서 적자로 돌아섰다. 음수의 거듭제곱근은 복소수가 되어 구간
+        # 비교에서 TypeError로 죽는다(실측: 삼성SDI). 이것도 사업 사실이므로
+        # 0점이되 유효만점에 남긴다.
+        return MetricScore(metric=name, value=None, points=0.0,
+                           max_points=cfg.points, status=STATUS_END_NONPOSITIVE)
     return _scored(name, (now / base) ** (1 / CAGR_YEARS) - 1, cfg)
 
 

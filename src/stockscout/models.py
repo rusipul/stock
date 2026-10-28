@@ -252,6 +252,7 @@ class Snapshot(BaseModel):
 STATUS_OK = "OK"
 STATUS_MISSING = "MISSING"                            # 데이터가 없어 계산 불가
 STATUS_BASE_NEGATIVE = "BASE_NEGATIVE"                # CAGR 기저가 0 이하
+STATUS_END_NONPOSITIVE = "END_NONPOSITIVE"            # CAGR 기저는 양수인데 최근 값이 0 이하
 STATUS_DENOMINATOR_NONPOSITIVE = "DENOMINATOR_NONPOSITIVE"   # 3년 누계 영업이익 <= 0
 AXIS_UNMEASURABLE = "AXIS_UNMEASURABLE"               # 축 유효만점이 배점의 절반 미만
 
