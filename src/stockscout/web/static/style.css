@@ -239,3 +239,9 @@ table.fin th:first-child, table.fin td:first-child { text-align: left; }
   font-variant-numeric: tabular-nums;
 }
 .metric-row i { font-style: normal; }
+
+/* 등급 뱃지. 관심종목 별(노랑)과 헷갈리지 않게 색을 따로 둔다. */
+.grade { font-size: 12px; letter-spacing: -.05em; }
+.grade.strong { color: var(--down); }
+.grade.watch  { color: #dd6b20; }
+#stock-list li.selected .grade { color: #fff; }

@@ -6,6 +6,7 @@ const state = {
   selected: null,
   chip: "all",
   dropThreshold: -0.40,
+  minScore: 70,
   chart: null,
 };
 
@@ -19,12 +20,15 @@ function loadPrefs() {
   try {
     const saved = localStorage.getItem("stockscout.dropThreshold");
     if (saved !== null) state.dropThreshold = parseFloat(saved);
+    const minScore = localStorage.getItem("stockscout.minScore");
+    if (minScore !== null) state.minScore = parseFloat(minScore);
   } catch (e) { /* 시크릿 모드 등에서 막힐 수 있다 */ }
 }
 
 function savePrefs() {
   try {
     localStorage.setItem("stockscout.dropThreshold", String(state.dropThreshold));
+    localStorage.setItem("stockscout.minScore", String(state.minScore));
   } catch (e) { /* 저장 실패는 기능을 막지 않는다 */ }
 }
 
@@ -50,12 +54,31 @@ function hits(row) {
   return d !== null && d <= state.dropThreshold;
 }
 
+// 서버의 grade_signal(analysis/grading.py)과 같은 규칙이다. 품질이 먼저다 -
+// 점수가 기준에 못 미치면 아무리 떨어져도 등급이 없다. 기본 상태에서는
+// 슬라이더 하나가 평균·고점 두 임계치를 함께 움직인다 (§11.1).
+function gradeOf(row) {
+  if (!state.snapshot.has_scores) return null;
+  if (!row.passed_filters || row.score_total === null) return null;
+  if (row.score_total < state.minScore) return null;
+  const avg = row.drop_vs_avg_5y;
+  const avgHit = avg !== null && avg <= state.dropThreshold;
+  const highHit = row.drop_vs_high !== null && row.drop_vs_high <= state.dropThreshold;
+  if (avgHit && highHit) return "STRONG";
+  if (avgHit || highHit) return "WATCH";
+  return null;
+}
+
+const GRADE_BADGES = { STRONG: "★★", WATCH: "★" };
+
 function visibleRows() {
   let rows = state.rows;
   if (state.chip === "passed") rows = rows.filter((r) => r.passed_filters);
   else if (state.chip === "excluded") rows = rows.filter((r) => !r.passed_filters);
   else if (state.chip === "watch") rows = rows.filter((r) => r.in_watchlist);
   else if (state.chip === "hit") rows = rows.filter((r) => r.passed_filters && hits(r));
+  else if (state.chip === "strong") rows = rows.filter((r) => gradeOf(r) === "STRONG");
+  else if (state.chip === "single") rows = rows.filter((r) => gradeOf(r) === "WATCH");
   return rows;
 }
 
@@ -72,8 +95,9 @@ function renderSnapshotInfo() {
 function renderScoreBlock() {
   const hasScores = state.snapshot.has_scores;
   $("score-threshold").disabled = !hasScores;
+  $("score-threshold").value = String(state.minScore);
   $("score-slider-block").classList.toggle("disabled-block", !hasScores);
-  $("score-value").textContent = hasScores ? "70점" : "—";
+  $("score-value").textContent = hasScores ? `${state.minScore}점` : "—";
   $("score-hint").textContent = hasScores
     ? ""
     : "재무 데이터가 없어 우량주 점수를 계산하지 못했습니다. "
@@ -81,9 +105,14 @@ function renderScoreBlock() {
 }
 
 function renderChips() {
+  // 점수가 없는 동안은 등급 칩 대신 가격만 본 "임계치 이하"를 보인다.
+  // 그때 ★를 보이면 품질을 확인한 것처럼 읽힌다.
+  const gradeDefs = state.snapshot.has_scores
+    ? [["strong", "★★"], ["single", "★"]]
+    : [["hit", "임계치 이하"]];
   const defs = [
     ["all", "전체"],
-    ["hit", "임계치 이하"],
+    ...gradeDefs,
     ["passed", "통과"],
     ["excluded", "제외"],
     ["watch", "관심"],
@@ -100,6 +129,13 @@ function renderChips() {
 
 function renderHitCount() {
   const passing = state.rows.filter((r) => r.passed_filters);
+  if (state.snapshot.has_scores) {
+    const strong = passing.filter((r) => gradeOf(r) === "STRONG").length;
+    const single = passing.filter((r) => gradeOf(r) === "WATCH").length;
+    $("hit-count").textContent =
+      `현재 기준 -> ★★ ${strong}종목 · ★ ${single}종목 / 통과 ${passing.length}종목`;
+    return;
+  }
   const n = passing.filter(hits).length;
   $("hit-count").textContent =
     `현재 기준 -> ${n}종목 해당 / 통과 ${passing.length}종목`;
@@ -123,6 +159,13 @@ function renderList() {
     const nm = document.createElement("span");
     nm.className = "nm";
     nm.textContent = row.name;
+    const grade = gradeOf(row);
+    if (grade) {
+      const badge = document.createElement("span");
+      badge.className = "grade " + grade.toLowerCase();
+      badge.textContent = GRADE_BADGES[grade];
+      nm.append(" ", badge);
+    }
 
     const dp = document.createElement("span");
     dp.className = "dp " + signClass(row.drop_vs_avg_5y);
@@ -418,7 +461,16 @@ function wireControls() {
     $("drop-value").textContent = `-${slider.value}%`;
     savePrefs();
     renderHitCount();
-    if (state.chip === "hit") renderList();
+    renderList();   // 등급 뱃지가 임계치를 따라 바뀐다
+  };
+
+  // 서버 왕복 없이 즉시 재판정한다 (설계서 §6.1).
+  $("score-threshold").oninput = () => {
+    state.minScore = Number($("score-threshold").value);
+    $("score-value").textContent = `${state.minScore}점`;
+    savePrefs();
+    renderHitCount();
+    renderList();
   };
 
   $("search").oninput = async () => { await reload(); };
