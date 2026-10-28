@@ -539,6 +539,27 @@ def test_analyze_as_of_is_scoped_to_market(repo):
     assert summary.as_of == date(2026, 9, 10)
 
 
+def test_analyze_coverage_calendar_is_scoped_to_market(repo):
+    """다른 시장의 거래일이 커버리지 분모에 섞이면 안 된다.
+
+    미국 종목이 한국 휴장일에 봉을 남기면 그 날짜가 한국 달력에 들어가
+    한국 종목은 '봉이 빠진 날'이 생긴 것처럼 보인다. 여기서는 평일만
+    거래하는 한국 종목 옆에 매일 봉이 있는 종목을 둬서 극단적으로
+    재현한다 - 섞이면 커버리지가 5/7 = 0.71로 min_data_coverage 0.8에
+    미달해 1·3·5년 평균이 전부 사라진다.
+    """
+    seed_weekdays(repo, "005930.KS", market="KR",
+                  first=date(2021, 9, 10), last=date(2026, 9, 10))
+    seed(repo, "AAPL", market="US",
+         first=date(2021, 9, 10), last=date(2026, 9, 10))
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+
+    assert row["avg_price_5y"] is not None
+    assert row["avg_price_1y"] is not None
+
+
 # --- 계획 C: 재무 필터·점수·등급 배선 ---------------------------------
 
 

@@ -289,6 +289,34 @@ def test_trading_dates_empty_when_no_data(repo):
     assert repo.trading_dates(date(2026, 1, 1), date(2026, 1, 31)) == []
 
 
+def test_trading_dates_can_be_scoped_to_a_market(repo):
+    """시장마다 휴장일이 다르다. 미국 장이 열린 한국 공휴일이 한국 달력에
+    섞이면 한국 종목 전부의 커버리지가 깎인다."""
+    from datetime import date
+
+    from stockscout.models import PriceBar, Security
+
+    repo.upsert_security(Security(ticker="005930.KS", market="KR",
+                                  name="삼성전자", currency="KRW"))
+    repo.upsert_security(Security(ticker="AAPL", market="US",
+                                  name="Apple", currency="USD"))
+    repo.save_price_bars(
+        [
+            PriceBar(ticker="005930.KS", date=date(2026, 1, 5), close=1.0),
+            PriceBar(ticker="AAPL", date=date(2026, 1, 5), close=1.0),
+            PriceBar(ticker="AAPL", date=date(2026, 1, 6), close=1.0),   # 한국 휴장
+        ],
+        source="test",
+    )
+
+    start, end = date(2026, 1, 1), date(2026, 1, 10)
+    assert repo.trading_dates(start, end, market="KR") == [date(2026, 1, 5)]
+    assert repo.trading_dates(start, end, market="US") == [date(2026, 1, 5),
+                                                          date(2026, 1, 6)]
+    # market을 생략하면 지금까지처럼 전 시장의 합집합이다
+    assert repo.trading_dates(start, end) == [date(2026, 1, 5), date(2026, 1, 6)]
+
+
 # --- latest_price_date_any -----------------------------------------------
 
 

@@ -87,8 +87,11 @@ def analyze_market(
     # 기준으로 전 종목을 평가하게 된다.
     as_of = repo.latest_price_date_any(market=market) or date.today()
     summary.as_of = as_of
+    # 커버리지 분모가 되는 거래일도 같은 이유로 시장을 한정한다. 시장마다
+    # 휴장일이 달라, 섞으면 다른 시장의 거래일이 이 시장 종목의 '빠진 봉'이
+    # 된다.
     calendar = repo.trading_dates(
-        _earliest_window_start(as_of, windows), as_of
+        _earliest_window_start(as_of, windows), as_of, market=market
     )
 
     results: list[AnalysisResult] = []

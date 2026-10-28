@@ -340,17 +340,38 @@ class Repository:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def trading_dates(self, start: date, end: date) -> list[date]:
-        """수집된 전 종목의 날짜 합집합. 거래소 달력 대신 쓴다.
+    def trading_dates(
+        self, start: date, end: date, market: str | None = None
+    ) -> list[date]:
+        """수집된 종목들의 날짜 합집합. 거래소 달력 대신 쓴다.
 
         별도 거래일 달력을 두지 않는 이유: 이미 수집한 데이터가 곧
         관측된 거래일이고, 휴장일 정의를 따로 관리하면 소스와 어긋난다.
+
+        market을 넘기면 그 시장 종목의 봉만 본다. 시장마다 휴장일이
+        다르다 - 미국 장이 열린 한국 공휴일이 한국 달력에 섞이면, 한국
+        종목 전부가 그날 봉이 빠진 것처럼 보여 커버리지가 깎이고 평균이
+        사라질 수 있다. analyze_market은 항상 분석 중인 시장을 넘긴다.
+        market을 생략하면 전 시장의 합집합이다 (latest_price_date_any와
+        같은 이유로 무필터 동작을 남긴다).
         """
-        rows = self.conn.execute(
-            "SELECT DISTINCT date FROM raw_prices WHERE date BETWEEN ? AND ? "
-            "ORDER BY date",
-            (start.isoformat(), end.isoformat()),
-        ).fetchall()
+        if market:
+            rows = self.conn.execute(
+                """
+                SELECT DISTINCT rp.date
+                FROM raw_prices rp
+                JOIN securities s ON s.ticker = rp.ticker
+                WHERE s.market = ? AND rp.date BETWEEN ? AND ?
+                ORDER BY rp.date
+                """,
+                (market, start.isoformat(), end.isoformat()),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT DISTINCT date FROM raw_prices WHERE date BETWEEN ? AND ? "
+                "ORDER BY date",
+                (start.isoformat(), end.isoformat()),
+            ).fetchall()
         return [date.fromisoformat(r["date"]) for r in rows]
 
     def latest_price_date_any(self, market: str | None = None) -> date | None:
