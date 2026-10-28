@@ -32,7 +32,7 @@ class RawStatement(BaseModel):
 
     ticker: str
     fiscal_year: int
-    source: str          # 'dart' | 'edgar'
+    source: str          # 'dart' | 'dart_shares' | 'dart_audit' | 'edgar'
     payload: dict
 
 
@@ -60,6 +60,45 @@ OPTIONAL_FIELDS = {
 }
 
 
+# 감사의견 결격 판정에 쓰는 단어. 설계서 §8.1이 "적정이 아니면 제외"라고
+# 하지만, 모르는 문자열을 결격으로 처리하면 표기가 조금 다른 회사가
+# 통째로 사라지고 아무도 이유를 모른다. 아는 단어에만 건다.
+#
+# 회계감사기준이 정하는 비적정 의견은 세 종류뿐이다 — 한정의견·부적정의견
+# ·의견거절. 아래 목록은 그 셋을 덮는다. KOSPI 42종목 210건 전수 조사에서
+# 비적정은 한 건도 없었으므로(적정의견 506행·적정 298행·적 정 9행 등),
+# 이 목록은 실측이 아니라 감사기준에서 온 것이다.
+#
+# 공백을 넣은 변형('의견 거절', '한 정')은 여기 적지 마라. 아래에서 찾는
+# 문자열도 값과 똑같이 공백류를 지우고 비교하므로 '의견거절'과 같은
+# 항목이 되어 아무것도 늘리지 않는다.
+ADVERSE_OPINION_WORDS = ("한정", "부적정", "의견거절")
+
+
+def is_adverse_opinion(opinion: str | None) -> bool:
+    """감사의견이 결격인가. 모르는 값은 결격으로 보지 않는다.
+
+    화이트리스트가 아니라 블랙리스트다 — "적정이 아니면 결격"이 아니라
+    "아는 결격 단어가 들어 있으면 결격"이다. '검토의견 없음'도 '(*1)'도
+    처음 보는 표기도 전부 False다. 조이러 온 사람에게: 이건 의도한
+    안전장치이지 느슨한 구현이 아니다(설계서 §8.1의 "적정이 아니면 제외"를
+    실측에 맞춰 좁힌 것이다). DART 문서가 값 목록을 명시하지 않아서,
+    모르는 문자열을 결격으로 처리하면 표기가 조금 다른 우량주가 통째로
+    사라지고 아무도 이유를 모른다.
+
+    비교할 때 찾는 단어도 값과 똑같이 공백류를 지운다. 스페이스만 지우면
+    안 된다. 이 값을 주는 DART
+    엔드포인트는 셀 한가운데에 줄바꿈을 박아 보낸다 — 실측에서
+    '삼일\\n회계법인', '적정\\n예외사항 없음', '제56기\\n(당기)'가 나왔다.
+    같은 방식으로 '의견\\n거절'이 오면 스페이스만 지우는 구현은 가장 강한
+    결격 신호를 조용히 흘려보낸다. 모든 공백류를 지운 뒤 비교한다.
+    """
+    if not opinion:
+        return False
+    text = "".join(opinion.split())
+    return any("".join(word.split()) in text for word in ADVERSE_OPINION_WORDS)
+
+
 class Financials(BaseModel):
     """한국·미국 재무 데이터가 수렴하는 공통 스키마.
 
@@ -85,6 +124,12 @@ class Financials(BaseModel):
     capex: float | None = None          # 양수 크기로 저장한다
     shares_outstanding: float | None = None
     dividend_per_share: float | None = None
+    shares_treasury: float | None = None      # 자기주식수 (설계서 §9.2)
+    audit_opinion: str | None = None          # '적정' 등 원문 (설계서 §8.1)
+
+    # 정확한 계정을 못 찾아 대체 계정으로 채운 필드 이름들 (설계서 §17.3).
+    # 이자보상배율을 금융비용으로 계산했다면 판정 근거가 그렇게 말해야 한다.
+    proxy_fields: list[str] = []
 
     # --- 결측 추적 ---------------------------------------------------
 
@@ -179,8 +224,8 @@ class PriceStats(BaseModel):
 class Valuation(BaseModel):
     """밸류에이션 지표 (설계서 §9.2). 화면 표시·정렬 전용, 점수에 넣지 않는다.
 
-    shares_outstanding이 없으면 셋 다 None이다. DART의 전체 재무제표
-    API가 발행주식수를 주지 않으므로 당분간 항상 None이다.
+    shares_outstanding이 없으면 셋 다 None이다. 발행주식수는 「주식의
+    총수 현황」에서 따로 수집하므로, 그 수집이 실패한 종목에서만 None이다.
     """
 
     market_cap: float | None = None
@@ -201,6 +246,74 @@ class Snapshot(BaseModel):
     config_hash: str
     config_json: str
     note: str | None = None
+
+
+# 지표·축 상태 (설계서 §8.2·§8.3)
+STATUS_OK = "OK"
+STATUS_MISSING = "MISSING"                            # 데이터가 없어 계산 불가
+STATUS_BASE_NEGATIVE = "BASE_NEGATIVE"                # CAGR 기저가 0 이하
+STATUS_END_NONPOSITIVE = "END_NONPOSITIVE"            # CAGR 기저는 양수인데 최근 값이 0 이하
+STATUS_DENOMINATOR_NONPOSITIVE = "DENOMINATOR_NONPOSITIVE"   # 3년 누계 영업이익 <= 0
+AXIS_UNMEASURABLE = "AXIS_UNMEASURABLE"               # 축 유효만점이 배점의 절반 미만
+
+AXIS_MAX = 25.0   # 축 하나의 배점. 4축 x 25 = 100점
+
+
+class MetricScore(BaseModel):
+    """지표 하나의 채점 결과. 화면이 근거를 보여줄 수 있게 원값을 함께 남긴다."""
+
+    metric: str
+    value: float | None
+    points: float
+    max_points: float
+    status: str
+
+
+class AxisScore(BaseModel):
+    """축 하나의 채점 결과.
+
+    earned/denominator를 그대로 들고 다니는 이유: 총점은 축 점수를
+    평균내는 것이 아니라 전체 획득을 전체 유효만점으로 나눈 값이다
+    (설계서 §8.3). 축에서 25점으로 환산해 버리면 그 계산을 할 수 없다.
+    """
+
+    axis: str
+    metrics: list[MetricScore]
+    earned: float
+    denominator: float
+    status: str
+    # 이 축의 배점 합. 기본값 AXIS_MAX는 4축 x 25라는 표준 배치일 뿐이고,
+    # 축을 조립하는 쪽이 설정에서 읽은 실제 배점 합으로 덮는다 - 사용자가
+    # YAML에서 배점을 바꿀 수 있기 때문이다.
+    max_points: float = AXIS_MAX
+
+    @property
+    def points(self) -> float:
+        """화면 표시용 0~배점 점수."""
+        if self.denominator <= 0:
+            return 0.0
+        return self.earned / self.denominator * self.max_points
+
+
+class ScoreCard(BaseModel):
+    """한 종목의 4축 채점 결과 전체 (설계서 §8.2)."""
+
+    axes: list[AxisScore]
+
+    @property
+    def total(self) -> float:
+        """설계서 §8.3: (획득점수 합계 / 유효만점 합계) x 100.
+
+        축 점수를 평균내면 안 된다. 평균은 모든 축을 같은 무게로 세는데,
+        결측이 많아 유효만점이 작아진 축은 적은 근거로 매긴 점수다.
+        그것을 온전한 축과 같은 무게로 세면 **가장 모르는 축이 총점을
+        가장 많이 흔든다.** 전체 획득을 전체 유효만점으로 나누면 축의
+        무게가 실제로 잰 점수에 비례한다.
+        """
+        denominator = sum(a.denominator for a in self.axes)
+        if denominator <= 0:
+            return 0.0
+        return sum(a.earned for a in self.axes) / denominator * 100
 
 
 class AnalysisResult(BaseModel):

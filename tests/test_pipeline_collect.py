@@ -549,3 +549,240 @@ def test_summary_render_names_remaining_tickers_when_aborted():
     text = summary.render()
 
     assert "A" in text and "B" in text and "2" in text
+
+
+# --- 주식수 수집 배선 (DART 전용 선택 엔드포인트) ---------------------
+
+
+class FakeFundamentalsWithShares(FakeFundamentals):
+    """주식수까지 주는 소스. DartSource가 이 모양이다.
+
+    위의 FakeFundamentals는 fetch_shares가 없는 소스(앞으로 붙일 EDGAR)를
+    대표하므로 그대로 둔다 — _collect_optional이 메서드 없는 소스를 조용히
+    건너뛰는 것 역시 지켜야 할 동작이다.
+    """
+
+    def __init__(self, *args, share_failure=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.share_requests: list[tuple[str, list[int]]] = []
+        self._share_failure = share_failure
+
+    def fetch_shares(self, ticker, years):
+        self.share_requests.append((ticker, list(years)))
+        if self._share_failure is not None:
+            raise self._share_failure
+        return [
+            RawStatement(ticker=ticker, fiscal_year=y, source="dart_shares",
+                         payload={"list": [{"se": "보통주", "istc_totqy": "100"}]})
+            for y in years
+        ]
+
+
+def test_collect_fetches_share_counts_and_counts_them(repo):
+    """소스가 fetch_shares를 가지면 재무제표와 같은 연도로 호출되고,
+    결과가 dart_shares 원본으로 저장되며 요약에 잡혀야 한다."""
+    repo.upsert_security(sec())
+    fundamentals = FakeFundamentalsWithShares()
+
+    summary = collect_market(
+        repo, "KR", fundamentals, FakePrices(),
+        years=[2024, 2025], price_start=date(2021, 1, 1), price_end=date(2026, 1, 31),
+    )
+
+    assert fundamentals.share_requests == [("005930.KS", [2024, 2025])]
+    assert summary.shares == 2
+    assert "주식수 2건" in summary.render()
+    saved = repo.get_raw_statements("005930.KS", source="dart_shares")
+    assert [s.fiscal_year for s in saved] == [2024, 2025]
+
+
+def test_collect_skips_share_years_already_stored(repo):
+    """증분 수집. 재무제표와 같은 규칙이다."""
+    repo.upsert_security(sec())
+    repo.save_raw_statements([
+        RawStatement(ticker="005930.KS", fiscal_year=2024,
+                     source="dart_shares", payload={"list": []})
+    ])
+    fundamentals = FakeFundamentalsWithShares()
+
+    collect_market(
+        repo, "KR", fundamentals, FakePrices(),
+        years=[2024, 2025], price_start=date(2021, 1, 1), price_end=date(2026, 1, 31),
+    )
+
+    assert fundamentals.share_requests == [("005930.KS", [2025])]
+
+
+def test_share_failure_keeps_statements_and_prices(repo):
+    """주식수는 별개의 try다. 실패해도 재무제표와 주가는 남아야 한다
+    (계획 A 결함 C2와 같은 원칙). 오류는 dart_shares 이름으로 기록된다."""
+    repo.upsert_security(sec())
+    fundamentals = FakeFundamentalsWithShares(
+        share_failure=PermanentSourceError("주식수 조회 실패")
+    )
+    prices = FakePrices(bars_by_ticker={
+        "005930.KS": [PriceBar(ticker="005930.KS", date=date(2025, 1, 2), close=100.0)]
+    })
+
+    summary = collect_market(
+        repo, "KR", fundamentals, prices,
+        years=[2025], price_start=date(2021, 1, 1), price_end=date(2026, 1, 31),
+    )
+
+    assert summary.statements == 1     # 재무제표는 살아남았다
+    assert summary.price_bars == 1     # 주가도 살아남았다
+    assert summary.shares == 0
+    assert summary.failed == 1
+    assert not summary.aborted
+    assert repo.recent_errors()[0]["source"] == "dart_shares"
+
+
+def test_fatal_share_error_aborts_the_batch(repo):
+    """등록되지 않은 키 같은 치명적 오류는 주식수 경로에서도 배치를 멈춘다."""
+    repo.upsert_security(sec())
+    repo.upsert_security(sec("000660.KS", "SK하이닉스"))
+    fundamentals = FakeFundamentalsWithShares(
+        share_failure=FatalSourceError("DART 인증키가 등록되지 않았습니다")
+    )
+
+    summary = collect_market(
+        repo, "KR", fundamentals, FakePrices(),
+        years=[2025], price_start=date(2021, 1, 1), price_end=date(2026, 1, 31),
+    )
+
+    assert summary.aborted
+    assert "인증키" in summary.abort_reason
+    assert len(summary.remaining) == 2   # 실패한 종목부터 남은 것으로 센다
+
+
+# --- 감사의견 수집 배선 (DART 전용 선택 엔드포인트) -------------------
+
+
+class FakeFundamentalsWithAudit(FakeFundamentalsWithShares):
+    """감사의견까지 주는 소스. DartSource가 이 모양이다.
+
+    위의 FakeFundamentalsWithShares는 fetch_audit이 없는 소스를 대표하므로
+    그대로 둔다 — _collect_optional이 메서드 없는 소스를 조용히 건너뛰는
+    것 역시 지켜야 할 동작이다.
+    """
+
+    def __init__(self, *args, audit_failure=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.audit_requests: list[tuple[str, list[int]]] = []
+        self._audit_failure = audit_failure
+
+    def fetch_audit(self, ticker, years):
+        self.audit_requests.append((ticker, list(years)))
+        if self._audit_failure is not None:
+            raise self._audit_failure
+        return [
+            RawStatement(
+                ticker=ticker, fiscal_year=y, source="dart_audit",
+                payload={"list": [{"bsns_year": "제56기\n(당기)",
+                                   "adt_opinion": "적정의견"}]},
+            )
+            for y in years
+        ]
+
+
+def test_collect_fetches_audit_opinions_and_counts_them(repo):
+    """소스가 fetch_audit을 가지면 재무제표와 같은 연도로 호출되고,
+    결과가 dart_audit 원본으로 저장되며 요약에 잡혀야 한다.
+
+    메서드 이름은 문자열로 배선되므로(_collect_optional의 method 인자)
+    오타가 나도 코드는 조용히 0건을 돌려준다. 그 오타를 잡는 테스트다.
+    """
+    repo.upsert_security(sec())
+    fundamentals = FakeFundamentalsWithAudit()
+
+    summary = collect_market(
+        repo, "KR", fundamentals, FakePrices(),
+        years=[2024, 2025], price_start=date(2021, 1, 1), price_end=date(2026, 1, 31),
+    )
+
+    assert fundamentals.audit_requests == [("005930.KS", [2024, 2025])]
+    assert summary.audits == 2
+    assert "감사의견 2건" in summary.render()
+    saved = repo.get_raw_statements("005930.KS", source="dart_audit")
+    assert [s.fiscal_year for s in saved] == [2024, 2025]
+
+
+def test_collect_skips_audit_when_the_source_does_not_provide_it(repo):
+    """fetch_audit이 없는 소스(앞으로 붙일 EDGAR)는 조용히 건너뛴다."""
+    repo.upsert_security(sec())
+    fundamentals = FakeFundamentalsWithShares()
+
+    summary = collect_market(
+        repo, "KR", fundamentals, FakePrices(),
+        years=[2025], price_start=date(2021, 1, 1), price_end=date(2026, 1, 31),
+    )
+
+    assert summary.audits == 0
+    assert summary.failed == 0
+    assert summary.shares == 1
+
+
+def test_collect_skips_audit_years_already_stored(repo):
+    """증분 수집. 재무제표·주식수와 같은 규칙이다."""
+    repo.upsert_security(sec())
+    repo.save_raw_statements([
+        RawStatement(ticker="005930.KS", fiscal_year=2024,
+                     source="dart_audit", payload={"list": []})
+    ])
+    fundamentals = FakeFundamentalsWithAudit()
+
+    collect_market(
+        repo, "KR", fundamentals, FakePrices(),
+        years=[2024, 2025], price_start=date(2021, 1, 1), price_end=date(2026, 1, 31),
+    )
+
+    assert fundamentals.audit_requests == [("005930.KS", [2025])]
+
+
+def test_audit_failure_keeps_statements_shares_and_prices(repo):
+    """감사의견은 별개의 try다. 실패해도 나머지 셋은 남아야 한다
+    (계획 A 결함 C2와 같은 원칙). 오류는 dart_audit 이름으로 기록된다."""
+    repo.upsert_security(sec())
+    fundamentals = FakeFundamentalsWithAudit(
+        audit_failure=PermanentSourceError("감사의견 조회 실패")
+    )
+    prices = FakePrices(bars_by_ticker={
+        "005930.KS": [PriceBar(ticker="005930.KS", date=date(2025, 1, 2), close=100.0)]
+    })
+
+    summary = collect_market(
+        repo, "KR", fundamentals, prices,
+        years=[2025], price_start=date(2021, 1, 1), price_end=date(2026, 1, 31),
+    )
+
+    assert summary.statements == 1     # 재무제표는 살아남았다
+    assert summary.shares == 1         # 주식수도 살아남았다
+    assert summary.price_bars == 1     # 주가도 살아남았다
+    assert summary.audits == 0
+    assert summary.failed == 1
+    assert not summary.aborted
+    assert repo.recent_errors()[0]["source"] == "dart_audit"
+
+
+def test_fatal_audit_error_aborts_the_batch(repo):
+    """등록되지 않은 키 같은 치명적 오류는 감사의견 경로에서도 배치를 멈춘다."""
+    repo.upsert_security(sec())
+    repo.upsert_security(sec("000660.KS", "SK하이닉스"))
+    fundamentals = FakeFundamentalsWithAudit(
+        audit_failure=FatalSourceError("DART 인증키가 등록되지 않았습니다")
+    )
+
+    summary = collect_market(
+        repo, "KR", fundamentals, FakePrices(),
+        years=[2025], price_start=date(2021, 1, 1), price_end=date(2026, 1, 31),
+    )
+
+    assert summary.aborted
+    assert "인증키" in summary.abort_reason
+    assert len(summary.remaining) == 2   # 실패한 종목부터 남은 것으로 센다
+
+
+def test_summary_render_with_audits_is_cp949_safe():
+    """한국어 Windows 콘솔은 cp949다. 요약 한 줄이 늘어나도 깨지면 안 된다."""
+    CollectSummary(total=1, succeeded=1, statements=5, shares=5,
+                   audits=5, price_bars=100).render().encode("cp949")

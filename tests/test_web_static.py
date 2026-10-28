@@ -209,3 +209,157 @@ def test_app_js_uses_server_computed_reference_lines():
     assert "avg_price_5y" in js
     body = js.split("function drawChart")[1].split("function")[0]
     assert "reduce" not in body
+
+
+# --- 계획 C: 점수 분해 ------------------------------------------------
+
+def js_text() -> str:
+    return (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+
+def _function_body(js: str, name: str) -> str:
+    """"function <name>"부터 중괄호 깊이가 0으로 돌아오는 지점까지.
+
+    split으로 대충 자르면 호출부를 집어 엉뚱한 곳을 검사한다 - 계획 D에서
+    drawChart 검사가 실제로 그랬다 (test_app_js_uses_server_computed_reference_lines).
+    """
+    start = js.index(f"function {name}(")
+    depth = 0
+    for i in range(js.index("{", start), len(js)):
+        if js[i] == "{":
+            depth += 1
+        elif js[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return js[start:i + 1]
+    raise AssertionError(f"{name}의 본문을 찾지 못했습니다")
+
+
+def test_app_js_renders_a_score_breakdown():
+    js = js_text()
+
+    assert "function scoreBars(" in js
+    assert "점수 분해" in _function_body(js, "renderDetail")
+
+
+def test_score_bars_scale_by_max_points_not_a_hardcoded_25():
+    """배점은 설정에서 온다. 사용자가 YAML을 고치면 막대도 따라야 한다."""
+    body = _function_body(js_text(), "scoreBars")
+
+    assert "max_points" in body
+    assert "25" not in body
+
+
+def test_score_bars_label_an_unmeasurable_axis():
+    body = _function_body(js_text(), "scoreBars")
+
+    assert "AXIS_UNMEASURABLE" in body
+    assert "측정 불가" in body
+
+
+def test_score_bars_expand_per_metric_with_details():
+    """설계서 §11.2: 막대 클릭 시 지표별 상세 펼침. 브라우저의 details가 준다."""
+    body = _function_body(js_text(), "scoreBars")
+
+    assert "<details" in body and "<summary" in body
+
+
+def test_every_scoring_status_has_a_label():
+    """서버가 내는 지표 상태마다 화면 문구가 있어야 한다.
+
+    없으면 그 지표는 '0.0 / 10'으로 표시돼 사업이 나쁜 것처럼 읽힌다.
+    END_NONPOSITIVE는 실데이터(삼성SDI)에서 나온 상태라 계획에 없었다.
+    """
+    from stockscout import models
+
+    js = js_text()
+    labels = js.split("const METRIC_STATUS_LABELS")[1].split("};")[0]
+    statuses = [v for k, v in vars(models).items()
+                if k.startswith("STATUS_") and v != models.STATUS_OK]
+
+    for status in statuses:
+        assert f"{status}:" in labels, f"{status}의 화면 문구가 없다"
+
+
+def test_detail_skips_the_breakdown_when_there_is_no_score():
+    body = _function_body(js_text(), "renderDetail")
+
+    assert "if (d.score_detail)" in body
+
+
+# --- 계획 C: 프론트 등급 판정 (설계서 §11.1) ---------------------------
+#
+# 등급은 프론트가 슬라이더로 즉석 판정한다(§6.1·§11.3). 서버의
+# grade_signal과 같은 규칙이어야 한다 - 품질이 먼저고, 점수가 기준에
+# 못 미치면 아무리 떨어져도 등급이 없다.
+
+def _run_grade_cases(cases):
+    """app.js의 gradeOf를 node에서 실제로 돌린다. 문자열 검사로는 규칙을 못 본다."""
+    import json as _json
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node 가 없어 등급 판정 실행 검사를 건너뛴다")
+
+    source = _function_body(js_text(), "gradeOf")
+    script = (
+        "const state = { minScore: 70, dropThreshold: -0.40,"
+        " snapshot: { has_scores: true } };\n"
+        f"{source}\n"
+        f"const cases = {_json.dumps(cases)};\n"
+        "console.log(JSON.stringify(cases.map(gradeOf)));"
+    )
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    return _json.loads(result.stdout)
+
+
+def _row(score=80.0, avg=-0.45, high=-0.50, passed=True):
+    return {"passed_filters": passed, "score_total": score,
+            "drop_vs_avg_5y": avg, "drop_vs_high": high}
+
+
+def test_grade_of_matches_the_server_rule():
+    grades = _run_grade_cases([
+        _row(),                          # 둘 다 넘음 -> 별 둘
+        _row(avg=-0.30),                 # 고점만 -> 별 하나
+        _row(score=42.0),                # LG화학: 많이 떨어졌지만 우량주가 아니다
+        _row(score=70.0),                # 경계: 70점은 통과
+        _row(passed=False, score=None),  # 제외 종목
+        _row(avg=0.1, high=-0.05),       # 우량주지만 안 떨어졌다
+        _row(avg=None, high=-0.50),      # 평균 커버리지 미달 -> 고점만으로 별 하나
+        _row(avg=-0.40, high=-0.40),     # 경계: -40%는 '이하'
+    ])
+
+    assert grades == ["STRONG", "WATCH", None, "STRONG", None, None, "WATCH", "STRONG"]
+
+
+def test_score_slider_regrades_without_a_server_round_trip():
+    body = _function_body(js_text(), "wireControls")
+    handler = body.split('$("score-threshold").oninput')[1].split("};")[0]
+
+    assert "state.minScore" in handler
+    assert "savePrefs()" in handler
+    assert "fetch" not in handler and "reload" not in handler
+
+
+def test_min_score_survives_a_reload():
+    """§11.1: 슬라이더 값은 localStorage에 저장해 다음 방문에 복원한다."""
+    js = js_text()
+
+    assert "minScore" in _function_body(js, "loadPrefs")
+    assert "minScore" in _function_body(js, "savePrefs")
+
+
+def test_grade_chips_appear_once_scores_exist():
+    body = _function_body(js_text(), "renderChips")
+
+    assert '"★★"' in body and '"★"' in body
+    assert "has_scores" in body
+
+
+def test_hit_count_reports_both_grades():
+    """§11.1: '현재 기준 -> ★★ N종목 · ★ M종목'."""
+    body = _function_body(js_text(), "renderHitCount")
+
+    assert "STRONG" in body and "WATCH" in body

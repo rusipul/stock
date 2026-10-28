@@ -24,7 +24,13 @@ pytestmark = pytest.mark.skipif(
 # 비금융이라 필터를 통과하며, 2021-09-10부터 5년 이력이 꽉 차 있다.
 CROSS_CHECK_TICKERS = ("005930.KS", "000270.KS")
 
-KNOWN_FILTER_IDS = {"FINANCIAL_SECTOR", "INSUFFICIENT_HISTORY"}
+KNOWN_FILTER_IDS = {
+    # 가격 필터 (계획 B)
+    "FINANCIAL_SECTOR", "INSUFFICIENT_HISTORY",
+    # 재무 필터 (계획 C)
+    "CAPITAL_IMPAIRED", "CONSECUTIVE_LOSS", "HIGH_DEBT", "INTEREST_UNCOVERED",
+    "REVENUE_COLLAPSE", "DATA_INSUFFICIENT", "ADVERSE_AUDIT_OPINION",
+}
 
 
 @pytest.fixture
@@ -108,18 +114,35 @@ def test_drop_vs_high_is_never_above_drop_vs_avg(rows):
         assert r["drop_vs_high"] <= r["drop_vs_avg_5y"] + 1e-9
 
 
-def test_valuation_is_null_without_financials(rows):
-    """발행주식수를 수집하기 전까지 셋 다 NULL이다."""
+def test_market_cap_is_present_once_shares_are_collected(rows):
+    """계획 C가 발행주식수를 수집한다. 시가총액은 전 종목에 있어야 한다.
+
+    PER은 적자 종목에서 NULL이 정상이므로 여기서 보지 않는다.
+    """
     for r in rows:
-        assert r["market_cap"] is None
-        assert r["per"] is None
-        assert r["pbr"] is None
+        assert r["market_cap"] is not None, r["ticker"]
 
 
-def test_score_columns_are_empty_until_plan_c(rows):
+def test_only_passing_rows_are_scored(rows):
+    """하드필터에 걸린 종목은 점수가 없다 - '제외됐지만 85점'이 나오면 안 된다."""
     for r in rows:
-        assert r["score_total"] is None
-        assert r["signal_grade"] is None
+        if r["passed_filters"]:
+            assert r["score_total"] is not None, r["ticker"]
+        else:
+            assert r["score_total"] is None, r["ticker"]
+        assert r["signal_grade"] in ("STRONG", "WATCH", "NONE")
+
+
+def test_lg_chem_gets_no_grade_despite_the_largest_drop(rows):
+    """계획 C의 시금석. 5년 평균 대비 하락 1위지만 영업이익률이 무너졌다.
+
+    많이 떨어졌다는 것만으로 등급이 나오면 이 제품은 위험하다.
+    """
+    row = next(r for r in rows if r["ticker"] == "051910.KS")
+
+    assert row["drop_vs_avg_5y"] <= -0.40
+    assert row["score_total"] < 70
+    assert row["signal_grade"] == "NONE"
 
 
 def test_snapshot_config_json_is_valid_json(repo):

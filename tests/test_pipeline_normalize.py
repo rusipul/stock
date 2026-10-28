@@ -216,3 +216,142 @@ def test_normalize_only_processes_matching_source(repo):
     fins = repo.get_financials("005930.KS")
     assert len(fins) == 1
     assert fins[0].revenue == 300000.0
+
+
+# --- 보강 소스 병합 (ENRICHERS) --------------------------------------
+
+# 삼성전자 2024 실측 형태. 보통주와 합계가 함께 오므로, 병합 경로가
+# parse_share_counts를 제대로 거치는지도 함께 드러난다.
+SHARES_PAYLOAD = {"list": [
+    {"se": "보통주", "istc_totqy": "5,969,782,550", "tesstk_co": "29,700,000"},
+    {"se": "우선주", "istc_totqy": "822,886,700", "tesstk_co": "4,050,000"},
+    {"se": "합계", "istc_totqy": "6,792,669,250", "tesstk_co": "33,750,000"},
+    {"se": "비고", "istc_totqy": "-", "tesstk_co": "-"},
+]}
+
+
+def test_normalize_merges_share_counts_onto_financials(repo):
+    """dart_shares 원본이 같은 (ticker, 연도)의 Financials 위에 얹힌다.
+    합계(6,792,669,250)가 아니라 보통주를 써야 한다."""
+    setup_ticker(repo, years=(2024,))
+    repo.save_raw_statements([
+        RawStatement(ticker="005930.KS", fiscal_year=2024,
+                     source="dart_shares", payload=SHARES_PAYLOAD)
+    ])
+
+    normalize_market(repo, market="KR")
+
+    (fin,) = repo.get_financials("005930.KS")
+    assert fin.shares_outstanding == 5_969_782_550.0
+    assert fin.shares_treasury == 29_700_000.0
+
+
+def test_normalize_leaves_years_without_share_data_alone(repo):
+    """보강은 있는 연도에만 얹힌다. 없는 연도가 덮어써져 NULL이 되면 안 된다."""
+    setup_ticker(repo, years=(2024, 2025))
+    repo.save_raw_statements([
+        RawStatement(ticker="005930.KS", fiscal_year=2024,
+                     source="dart_shares", payload=SHARES_PAYLOAD)
+    ])
+
+    normalize_market(repo, market="KR")
+
+    by_year = {f.fiscal_year: f for f in repo.get_financials("005930.KS")}
+    assert by_year[2024].shares_outstanding == 5_969_782_550.0
+    assert by_year[2025].shares_outstanding is None
+
+
+def test_normalize_does_not_create_rows_for_share_only_years(repo):
+    """주식수만 있고 재무제표가 없는 연도에는 financials 행을 만들지 않는다.
+
+    금융 7종목의 2021·2022년이 정확히 그 모양이다(DART에 CFS 재무제표가
+    없는데 주식수는 온다). 행을 만들면 필수 항목이 전부 비어
+    DATA_INSUFFICIENT만 늘어난다 — ENRICHERS 주석이 약속하는 바다.
+    """
+    setup_ticker(repo, years=(2024,))
+    repo.save_raw_statements([
+        RawStatement(ticker="005930.KS", fiscal_year=2022,
+                     source="dart_shares", payload=SHARES_PAYLOAD)
+    ])
+
+    summary = normalize_market(repo, market="KR")
+
+    assert [f.fiscal_year for f in repo.get_financials("005930.KS")] == [2024]
+    assert summary.normalized == 1
+
+
+# --- 감사의견 병합 -----------------------------------------------------
+
+# 삼성전자 2024 실측 형태. 기수당 2행씩 중복으로 오고 bsns_year에
+# 줄바꿈이 박혀 있다.
+AUDIT_PAYLOAD = {"list": [
+    {"bsns_year": "제56기\n(당기)", "adt_opinion": "적정의견", "adtor": "안진회계법인"},
+    {"bsns_year": "제56기\n(당기)", "adt_opinion": "적정의견", "adtor": "안진회계법인"},
+    {"bsns_year": "제55기\n(전기)", "adt_opinion": "적정의견", "adtor": "안진회계법인"},
+    {"bsns_year": "제55기\n(전기)", "adt_opinion": "적정의견", "adtor": "안진회계법인"},
+]}
+
+
+def test_normalize_merges_audit_opinion_onto_financials(repo):
+    """dart_audit 원본이 같은 (ticker, 연도)의 Financials 위에 얹힌다.
+
+    ENRICHERS 표는 (source 문자열, 함수) 쌍으로 배선되므로 어느 쪽에
+    오타가 나도 코드는 조용히 아무것도 얹지 않는다. 그 오타를 잡는다.
+    """
+    setup_ticker(repo, years=(2024,))
+    repo.save_raw_statements([
+        RawStatement(ticker="005930.KS", fiscal_year=2024,
+                     source="dart_audit", payload=AUDIT_PAYLOAD)
+    ])
+
+    normalize_market(repo, market="KR")
+
+    (fin,) = repo.get_financials("005930.KS")
+    assert fin.audit_opinion == "적정의견"
+
+
+def test_normalize_leaves_years_without_audit_data_alone(repo):
+    """보강은 있는 연도에만 얹힌다. 없는 연도가 덮어써져 NULL이 되면 안 된다."""
+    setup_ticker(repo, years=(2024, 2025))
+    repo.save_raw_statements([
+        RawStatement(ticker="005930.KS", fiscal_year=2024,
+                     source="dart_audit", payload=AUDIT_PAYLOAD)
+    ])
+
+    normalize_market(repo, market="KR")
+
+    by_year = {f.fiscal_year: f for f in repo.get_financials("005930.KS")}
+    assert by_year[2024].audit_opinion == "적정의견"
+    assert by_year[2025].audit_opinion is None
+
+
+def test_normalize_keeps_audit_opinion_null_for_placeholder_payloads(repo):
+    """현대차 2024·2025 실측. status=000인데 모든 칸이 '-'다.
+    빈 문자열이 아니라 NULL로 남아야 "의견을 모른다"가 된다."""
+    setup_ticker(repo, years=(2024,))
+    repo.save_raw_statements([
+        RawStatement(ticker="005930.KS", fiscal_year=2024, source="dart_audit",
+                     payload={"list": [{"bsns_year": "-", "adtor": "-"}] * 3})
+    ])
+
+    normalize_market(repo, market="KR")
+
+    (fin,) = repo.get_financials("005930.KS")
+    assert fin.audit_opinion is None
+
+
+def test_normalize_merges_shares_and_audit_together(repo):
+    """보강 소스가 둘로 늘어나도 서로를 지우지 않아야 한다."""
+    setup_ticker(repo, years=(2024,))
+    repo.save_raw_statements([
+        RawStatement(ticker="005930.KS", fiscal_year=2024,
+                     source="dart_shares", payload=SHARES_PAYLOAD),
+        RawStatement(ticker="005930.KS", fiscal_year=2024,
+                     source="dart_audit", payload=AUDIT_PAYLOAD),
+    ])
+
+    normalize_market(repo, market="KR")
+
+    (fin,) = repo.get_financials("005930.KS")
+    assert fin.shares_outstanding == 5_969_782_550.0
+    assert fin.audit_opinion == "적정의견"

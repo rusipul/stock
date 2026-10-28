@@ -31,6 +31,15 @@ STATUS_UNDEFINED_ERROR = "900"       # 정의되지 않은 오류
 
 REPORT_CODE_ANNUAL = "11011"  # 사업보고서
 
+# 주식의 총수 현황(stockTotqySttus.json)의 raw_financials.source 값.
+# 재무제표('dart')와 같은 테이블에 들어가되 기본키가 (ticker, fiscal_year,
+# source)라 서로 덮어쓰지 않는다.
+SOURCE_SHARES = "dart_shares"
+
+# 회계감사인의 명칭 및 감사의견(accnutAdtorNmNdAdtOpinion.json)의
+# raw_financials.source 값. 주식수와 같은 이유로 테이블을 늘리지 않는다.
+SOURCE_AUDIT = "dart_audit"
+
 
 class DartServiceUnavailable(ConnectionError):
     """DART가 점검 중이라 응답을 내주지 못한다 (status=800).
@@ -140,9 +149,83 @@ class DartSource:
             )
         return statements
 
+    def fetch_shares(self, ticker: str, years: list[int]) -> list[RawStatement]:
+        """주식의 총수 현황을 연도별로 받는다.
+
+        RawStatement를 재사용하고 source만 달리한다. raw_financials의
+        기본키가 (ticker, fiscal_year, source)라 테이블을 늘리지 않아도 된다.
+        """
+        self.ensure_corp_codes()
+        stock_code = self._stock_code(ticker)
+        corp_code = self.corp_codes.get(stock_code)
+        if not corp_code:
+            raise PermanentSourceError(f"{ticker}의 corp_code를 찾을 수 없습니다")
+
+        statements: list[RawStatement] = []
+        for year in years:
+            payload = self._fetch_shares_one_year(corp_code, year)
+            if payload is None:
+                continue
+            statements.append(RawStatement(
+                ticker=ticker, fiscal_year=year,
+                source=SOURCE_SHARES, payload=payload,
+            ))
+        return statements
+
+    def fetch_audit(self, ticker: str, years: list[int]) -> list[RawStatement]:
+        """회계감사인의 명칭 및 감사의견을 연도별로 받는다.
+
+        fetch_shares와 같은 모양이다 — 파라미터가 재무제표 API와 같고
+        source만 달리해 raw_financials에 담는다 (설계서 §8.1·§17.4).
+        """
+        self.ensure_corp_codes()
+        stock_code = self._stock_code(ticker)
+        corp_code = self.corp_codes.get(stock_code)
+        if not corp_code:
+            raise PermanentSourceError(f"{ticker}의 corp_code를 찾을 수 없습니다")
+
+        statements: list[RawStatement] = []
+        for year in years:
+            payload = self._fetch_audit_one_year(corp_code, year)
+            if payload is None:
+                continue
+            statements.append(RawStatement(
+                ticker=ticker, fiscal_year=year,
+                source=SOURCE_AUDIT, payload=payload,
+            ))
+        return statements
+
     @retry_on_transient(attempts=3)
     def _fetch_one_year(self, corp_code: str, year: int) -> dict | None:
-        """한 회계연도의 연결 재무제표 원본. 데이터가 없으면 None.
+        """한 회계연도의 연결 재무제표 원본. 데이터가 없으면 None."""
+        return self._fetch_json(
+            "fnlttSinglAcntAll.json", corp_code, year, {"fs_div": "CFS"}
+        )
+
+    @retry_on_transient(attempts=3)
+    def _fetch_shares_one_year(self, corp_code: str, year: int) -> dict | None:
+        """한 회계연도의 주식의 총수 현황. 데이터가 없으면 None."""
+        return self._fetch_json("stockTotqySttus.json", corp_code, year, {})
+
+    @retry_on_transient(attempts=3)
+    def _fetch_audit_one_year(self, corp_code: str, year: int) -> dict | None:
+        """한 회계연도의 감사인·감사의견. 데이터가 없으면 None."""
+        return self._fetch_json(
+            "accnutAdtorNmNdAdtOpinion.json", corp_code, year, {}
+        )
+
+    def _fetch_json(
+        self, endpoint: str, corp_code: str, year: int, extra: dict[str, str]
+    ) -> dict | None:
+        """DART JSON 엔드포인트 하나를 호출하고 status 7종을 해석한다.
+
+        DART의 모든 공시 API가 crtfc_key·corp_code·bsns_year·reprt_code를
+        공유하고 status 코드 체계도 같다. 엔드포인트마다 이 판단을 복사하면
+        한 곳만 고쳐지는 일이 생긴다.
+
+        retry_on_transient은 여기에 붙이지 않는다 — 호출자
+        (_fetch_one_year·_fetch_shares_one_year)에 이미 붙어 있어서,
+        중첩하면 800 하나에 재시도가 3회가 아니라 9회가 된다.
 
         DART 응답 status 7종(공식 가이드 DS003/2019020)을 각각 다르게
         처리한다. 핵심은 "이 실패가 다음 종목에도 그대로 반복되는가"다:
@@ -164,13 +247,13 @@ class DartSource:
         self.bucket.wait()
         self.quota.consume()
         resp = self._client.get(
-            f"{BASE_URL}/fnlttSinglAcntAll.json",
+            f"{BASE_URL}/{endpoint}",
             params={
                 "crtfc_key": self.api_key,
                 "corp_code": corp_code,
                 "bsns_year": str(year),
                 "reprt_code": REPORT_CODE_ANNUAL,
-                "fs_div": "CFS",
+                **extra,
             },
         )
         resp.raise_for_status()

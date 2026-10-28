@@ -3,7 +3,15 @@ from pathlib import Path
 
 import pytest
 
-from stockscout.config import Config, Secrets, load_config, load_secrets
+from pydantic import ValidationError
+
+from stockscout.config import (
+    Config,
+    HardFilterConfig,
+    Secrets,
+    load_config,
+    load_secrets,
+)
 
 
 def test_load_config_reads_yaml(tmp_path):
@@ -207,3 +215,48 @@ def test_subset_of_supported_windows_is_allowed(tmp_path):
     cfg = load_config(path)
 
     assert cfg.lookback.price_years == [1, 3]
+
+
+def test_hard_filter_year_counts_must_be_at_least_one():
+    """연수 0을 설정 단계에서 막는다.
+
+    interest_coverage_years=0이면 이자보상배율 필터가 정확히 뒤집힌다.
+    coverages가 빈 목록이 될 수 있고, 그때 len([]) == 0이 참이면서
+    all([])도 True라 통과 조건이 곧 실패 조건이 된다 — 이자비용을
+    측정할 수 없는 회사가 "이자 미충당"으로 제외된다. 실측 196행 중
+    157행이 대체값이므로 유니버스 대부분이 여기 해당한다.
+
+    나머지 둘은 지금 같은 역전을 일으키지 않지만, 개수로 창을 자르는
+    같은 모양의 필드이므로 함께 막는다. 셋 중 하나만 닫아 두면 다음에
+    누가 필터를 고칠 때 어느 것이 안전한지 매번 다시 따져야 한다.
+    """
+    for field in (
+        "consecutive_operating_loss_years",
+        "interest_coverage_years",
+        "min_history_years",
+    ):
+        with pytest.raises(ValidationError):
+            HardFilterConfig(**{field: 0})
+
+
+def test_hard_filter_year_counts_reject_negatives():
+    with pytest.raises(ValidationError):
+        HardFilterConfig(interest_coverage_years=-1)
+
+
+def test_hard_filter_year_count_of_one_is_allowed():
+    """1은 막지 않는다. 막는 것은 0 이하뿐이다."""
+    config = HardFilterConfig(interest_coverage_years=1)
+
+    assert config.interest_coverage_years == 1
+
+
+def test_hard_filter_year_counts_are_rejected_through_yaml(tmp_path):
+    """설정 파일을 거쳐 들어와도 막힌다 — 실제로 값이 오는 경로다."""
+    path = tmp_path / "settings.yaml"
+    path.write_text(
+        "hard_filters:\n  interest_coverage_years: 0\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValidationError):
+        load_config(path)

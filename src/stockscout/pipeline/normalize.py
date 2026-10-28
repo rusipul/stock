@@ -2,16 +2,37 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from pydantic import BaseModel
 
-from stockscout.normalize.kr_mapping import normalize_dart_statement
+from stockscout.models import Financials
+from stockscout.normalize.kr_mapping import (
+    apply_audit_opinion,
+    apply_share_counts,
+    normalize_dart_statement,
+)
 from stockscout.store.repository import Repository
+
+# 보강 함수는 이미 만들어진 Financials를 제자리에서 고친다.
+Enricher = Callable[[Financials, dict], None]
 
 # 시장별 (원본 source 식별자, 정규화 함수). raw_financials는 (ticker, fiscal_year,
 # source)로 dart/edgar를 함께 담으므로, 정규화기가 자기 것만 골라 보게
 # source를 함께 등록한다. 계획 D에서 "US": ("edgar", normalize_edgar_statement)
 # 를 추가한다.
 NORMALIZERS = {"KR": ("dart", normalize_dart_statement)}
+
+# 재무제표 위에 얹는 보강 소스: (원본 source, 적용 함수).
+# 재무제표가 있는 연도에만 얹는다 — 주식수만 있는 연도에 Financials 행을
+# 만들면 필수 항목이 전부 비어 DATA_INSUFFICIENT가 될 뿐이다. 금융
+# 7종목의 2021·2022년이 정확히 그 모양이다(DART에 재무제표가 없다).
+ENRICHERS: dict[str, list[tuple[str, Enricher]]] = {
+    "KR": [
+        ("dart_shares", apply_share_counts),
+        ("dart_audit", apply_audit_opinion),
+    ],
+}
 
 
 class NormalizeSummary(BaseModel):
@@ -57,6 +78,12 @@ def normalize_market(repo: Repository, market: str) -> NormalizeSummary:
         # normalize 명령의 존재 이유다.
         try:
             records = [normalizer(s) for s in statements]
+            by_year = {r.fiscal_year: r for r in records}
+            for enrich_source, enrich in ENRICHERS.get(market, []):
+                for raw in repo.get_raw_statements(ticker, source=enrich_source):
+                    target = by_year.get(raw.fiscal_year)
+                    if target is not None:
+                        enrich(target, raw.payload)
             repo.save_financials(records)
         except Exception as exc:
             repo.record_error(ticker, source, f"{type(exc).__name__}: {exc}")

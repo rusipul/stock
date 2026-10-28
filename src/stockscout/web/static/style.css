@@ -207,3 +207,41 @@ table.fin th, table.fin td {
 }
 table.fin th { background: var(--panel); color: var(--muted); font-weight: 600; }
 table.fin th:first-child, table.fin td:first-child { text-align: left; }
+
+/* 점수 분해 4축 막대 (설계서 §11.2) */
+.score-bars .axis { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.score-bars summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+.score-bars summary::-webkit-details-marker { display: none; }
+.axis-name  { width: 68px; font-size: 13px; }
+.axis-track { flex: 1; height: 10px; background: var(--border); border-radius: 5px; }
+.axis-fill  { display: block; height: 100%; background: var(--accent); border-radius: 5px; }
+.axis-score {
+  width: 78px;
+  text-align: right;
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.axis-note  { font-size: 12px; color: var(--muted); }
+.axis.unmeasurable .axis-fill { background: #cbd5e0; }
+.metric-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0 3px 78px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.metric-row i { font-style: normal; }
+
+/* 등급 뱃지. 관심종목 별(노랑)과 헷갈리지 않게 색을 따로 둔다. */
+.grade { font-size: 12px; letter-spacing: -.05em; }
+.grade.strong { color: var(--down); }
+.grade.watch  { color: #dd6b20; }
+#stock-list li.selected .grade { color: #fff; }

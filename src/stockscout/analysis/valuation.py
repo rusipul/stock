@@ -97,10 +97,9 @@ def compute_valuation(price: float, latest: Financials | None) -> Valuation:
     화면 표시와 정렬에만 쓴다. 점수에는 넣지 않는다 — 설계서 §8.2가
     밸류에이션을 스코어링에서 뺐기 때문이다.
 
-    발행주식수가 없으면 셋 다 None이다. DART의 단일회사 전체 재무제표
-    API(fnlttSinglAcntAll)는 발행주식수를 주지 않고 「주식의 총수 현황」
-    이라는 별도 공시 항목에 있으므로, 그것을 수집하기 전까지는 항상
-    None이 된다.
+    발행주식수가 없으면 셋 다 None이다. 발행주식수는 전체 재무제표
+    API(fnlttSinglAcntAll)가 아니라 「주식의 총수 현황」(stockTotqySttus)
+    에서 따로 수집하므로, 그 수집이 실패한 종목에서만 None이 된다.
 
     세 지표는 서로 독립이다. 적자 기업이라 PER이 없어도 시가총액과
     PBR은 남긴다.
@@ -108,21 +107,31 @@ def compute_valuation(price: float, latest: Financials | None) -> Valuation:
     if latest is None or not latest.shares_outstanding:
         return Valuation()
 
-    shares = latest.shares_outstanding
-    if shares <= 0:
+    issued = latest.shares_outstanding
+    if issued <= 0:
         return Valuation()
 
-    market_cap = price * shares
+    # 시가총액은 발행주식총수, EPS·BPS는 유통주식수를 쓴다 (설계서 §9.2).
+    # 자기주식은 배당도 의결권도 없으므로 주당 지표의 분모에서 빼는 것이
+    # 맞다. 자기주식을 못 구했거나 값이 이상하면 발행주식총수로 돌아간다 -
+    # 자사주 비중은 대개 작아서, NULL로 만드는 쪽이 손해가 크다.
+    free_float = issued
+    if latest.shares_treasury is not None:
+        remaining = issued - latest.shares_treasury
+        if remaining > 0:
+            free_float = remaining
+
+    market_cap = price * issued
 
     per = None
     if latest.net_income is not None:
-        eps = latest.net_income / shares
+        eps = latest.net_income / free_float
         if eps > 0:
             per = price / eps
 
     pbr = None
     if latest.total_equity is not None:
-        bps = latest.total_equity / shares
+        bps = latest.total_equity / free_float
         if bps > 0:
             pbr = price / bps
 

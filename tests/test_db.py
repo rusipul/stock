@@ -109,3 +109,61 @@ def test_init_db_as_of_migration_is_idempotent(tmp_path):
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(snapshots)")}
 
     assert "as_of" in cols
+
+
+# --- 계획 C 스키마 추가: financials의 세 컬럼 ---------------------------
+#
+# as_of와 같은 문제, 같은 패턴이다. 다만 이 테스트가 없으면 검증 구멍이
+# 생긴다: 신규 DB는 schema.sql이 세 컬럼을 이미 만들어주므로
+# _add_financials_columns_if_missing의 `if name not in columns`가 항상
+# 거짓이 되고, ALTER TABLE 줄은 어느 테스트에서도 실행되지 않는다.
+# 컬럼명이나 타입에 오타가 나도 스위트는 전부 초록이고, 몇 분 걸려 받은
+# 실제 DB에서만 조용히 어긋난다. 그래서 옛 스키마를 직접 만들어 그 줄을
+# 실제로 통과시킨다.
+
+
+def test_init_db_adds_plan_c_columns_to_pre_existing_financials_table(tmp_path):
+    db_path = tmp_path / "old.db"
+
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE financials (
+                ticker              TEXT NOT NULL,
+                fiscal_year         INTEGER NOT NULL,
+                currency            TEXT NOT NULL,
+                revenue             REAL,
+                operating_income    REAL,
+                net_income          REAL,
+                total_assets        REAL,
+                total_liabilities   REAL,
+                total_equity        REAL,
+                current_assets      REAL,
+                current_liabilities REAL,
+                interest_expense    REAL,
+                operating_cash_flow REAL,
+                capex               REAL,
+                shares_outstanding  REAL,
+                dividend_per_share  REAL,
+                missing_fields      TEXT,
+                PRIMARY KEY (ticker, fiscal_year)
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO financials (ticker, fiscal_year, currency, revenue) "
+            "VALUES ('005930.KS', 2024, 'KRW', 300.0)"
+        )
+        conn.commit()
+
+    with connect(db_path) as conn:
+        init_db(conn)  # 여기서 컬럼 셋을 얹어야 한다
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(financials)")}
+        rows = conn.execute(
+            "SELECT revenue, shares_treasury, audit_opinion, proxy_fields FROM financials"
+        ).fetchall()
+
+    assert {"shares_treasury", "audit_opinion", "proxy_fields"} <= cols
+    assert len(rows) == 1                     # 마이그레이션이 데이터를 날리지 않았다
+    assert rows[0]["revenue"] == 300.0        # 기존 값도 그대로다
+    assert rows[0]["proxy_fields"] is None    # 옛 행은 값이 없을 뿐이다

@@ -55,12 +55,30 @@ class LookbackConfig(BaseModel):
 
 
 class HardFilterConfig(BaseModel):
+    """설계서 §8.1의 하드필터 임계치.
+
+    연수 필드에 ge=1을 두는 이유: 0을 허용하면 이자보상배율 필터가
+    퇴화 설정에서 정확히 뒤집힌다. interest_coverage_years=0이면
+    coverages가 빈 목록이 될 수 있고, 그때 len([]) == 0이 참이면서
+    all([])도 True라 **통과 조건이 곧 실패 조건이 된다** — 이자비용을
+    측정할 수 없는 회사(NULL이거나 금융원가 대체값)가 "이자 미충당"으로
+    제외된다. 실측 196행 중 157행이 대체값이므로 유니버스 대부분이
+    여기 해당한다. "모르는 것으로 떨어뜨리지 않는다"의 정확한 역전이다.
+
+    형제 필터는 같은 설정에서 그냥 꺼지므로(창 길이로 재기 때문에)
+    같은 모양의 두 필터가 정반대로 움직인다. 필터 코드를 고쳐
+    len(coverage_window)로 재는 대안도 있으나, 그러면 재무가 1년뿐인
+    회사가 2년 필터에 걸리게 되어 동작이 나빠진다. 애초에 들어올 수
+    없게 설정 로드 시점에 막는 것이 맞다 — LookbackConfig가 같은
+    자리에서 하는 일과 같다.
+    """
+
     max_debt_ratio: float = 200.0
-    consecutive_operating_loss_years: int = 3
+    consecutive_operating_loss_years: int = Field(default=3, ge=1)
     min_interest_coverage: float = 1.0
-    interest_coverage_years: int = 2
+    interest_coverage_years: int = Field(default=2, ge=1)
     max_revenue_decline_3y: float = -0.5
-    min_history_years: int = 5
+    min_history_years: int = Field(default=5, ge=1)
 
 
 class MetricConfig(BaseModel):

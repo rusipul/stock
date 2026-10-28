@@ -6,6 +6,7 @@ const state = {
   selected: null,
   chip: "all",
   dropThreshold: -0.40,
+  minScore: 70,
   chart: null,
 };
 
@@ -19,12 +20,15 @@ function loadPrefs() {
   try {
     const saved = localStorage.getItem("stockscout.dropThreshold");
     if (saved !== null) state.dropThreshold = parseFloat(saved);
+    const minScore = localStorage.getItem("stockscout.minScore");
+    if (minScore !== null) state.minScore = parseFloat(minScore);
   } catch (e) { /* 시크릿 모드 등에서 막힐 수 있다 */ }
 }
 
 function savePrefs() {
   try {
     localStorage.setItem("stockscout.dropThreshold", String(state.dropThreshold));
+    localStorage.setItem("stockscout.minScore", String(state.minScore));
   } catch (e) { /* 저장 실패는 기능을 막지 않는다 */ }
 }
 
@@ -50,12 +54,31 @@ function hits(row) {
   return d !== null && d <= state.dropThreshold;
 }
 
+// 서버의 grade_signal(analysis/grading.py)과 같은 규칙이다. 품질이 먼저다 -
+// 점수가 기준에 못 미치면 아무리 떨어져도 등급이 없다. 기본 상태에서는
+// 슬라이더 하나가 평균·고점 두 임계치를 함께 움직인다 (§11.1).
+function gradeOf(row) {
+  if (!state.snapshot.has_scores) return null;
+  if (!row.passed_filters || row.score_total === null) return null;
+  if (row.score_total < state.minScore) return null;
+  const avg = row.drop_vs_avg_5y;
+  const avgHit = avg !== null && avg <= state.dropThreshold;
+  const highHit = row.drop_vs_high !== null && row.drop_vs_high <= state.dropThreshold;
+  if (avgHit && highHit) return "STRONG";
+  if (avgHit || highHit) return "WATCH";
+  return null;
+}
+
+const GRADE_BADGES = { STRONG: "★★", WATCH: "★" };
+
 function visibleRows() {
   let rows = state.rows;
   if (state.chip === "passed") rows = rows.filter((r) => r.passed_filters);
   else if (state.chip === "excluded") rows = rows.filter((r) => !r.passed_filters);
   else if (state.chip === "watch") rows = rows.filter((r) => r.in_watchlist);
   else if (state.chip === "hit") rows = rows.filter((r) => r.passed_filters && hits(r));
+  else if (state.chip === "strong") rows = rows.filter((r) => gradeOf(r) === "STRONG");
+  else if (state.chip === "single") rows = rows.filter((r) => gradeOf(r) === "WATCH");
   return rows;
 }
 
@@ -72,8 +95,9 @@ function renderSnapshotInfo() {
 function renderScoreBlock() {
   const hasScores = state.snapshot.has_scores;
   $("score-threshold").disabled = !hasScores;
+  $("score-threshold").value = String(state.minScore);
   $("score-slider-block").classList.toggle("disabled-block", !hasScores);
-  $("score-value").textContent = hasScores ? "70점" : "—";
+  $("score-value").textContent = hasScores ? `${state.minScore}점` : "—";
   $("score-hint").textContent = hasScores
     ? ""
     : "재무 데이터가 없어 우량주 점수를 계산하지 못했습니다. "
@@ -81,9 +105,14 @@ function renderScoreBlock() {
 }
 
 function renderChips() {
+  // 점수가 없는 동안은 등급 칩 대신 가격만 본 "임계치 이하"를 보인다.
+  // 그때 ★를 보이면 품질을 확인한 것처럼 읽힌다.
+  const gradeDefs = state.snapshot.has_scores
+    ? [["strong", "★★"], ["single", "★"]]
+    : [["hit", "임계치 이하"]];
   const defs = [
     ["all", "전체"],
-    ["hit", "임계치 이하"],
+    ...gradeDefs,
     ["passed", "통과"],
     ["excluded", "제외"],
     ["watch", "관심"],
@@ -100,6 +129,13 @@ function renderChips() {
 
 function renderHitCount() {
   const passing = state.rows.filter((r) => r.passed_filters);
+  if (state.snapshot.has_scores) {
+    const strong = passing.filter((r) => gradeOf(r) === "STRONG").length;
+    const single = passing.filter((r) => gradeOf(r) === "WATCH").length;
+    $("hit-count").textContent =
+      `현재 기준 -> ★★ ${strong}종목 · ★ ${single}종목 / 통과 ${passing.length}종목`;
+    return;
+  }
   const n = passing.filter(hits).length;
   $("hit-count").textContent =
     `현재 기준 -> ${n}종목 해당 / 통과 ${passing.length}종목`;
@@ -123,6 +159,13 @@ function renderList() {
     const nm = document.createElement("span");
     nm.className = "nm";
     nm.textContent = row.name;
+    const grade = gradeOf(row);
+    if (grade) {
+      const badge = document.createElement("span");
+      badge.className = "grade " + grade.toLowerCase();
+      badge.textContent = GRADE_BADGES[grade];
+      nm.append(" ", badge);
+    }
 
     const dp = document.createElement("span");
     dp.className = "dp " + signClass(row.drop_vs_avg_5y);
@@ -217,6 +260,15 @@ function renderDetail(d, prices) {
   ].join("");
   panel.appendChild(kpis);
 
+  // 점수 분해 (설계서 §11.2). 제외된 종목은 채점하지 않았으므로 막대가 없다.
+  if (d.score_detail) {
+    panel.appendChild(sectionTitle("점수 분해"));
+    const bars = document.createElement("div");
+    bars.className = "score-bars";
+    bars.innerHTML = scoreBars(d.score_detail);
+    panel.appendChild(bars);
+  }
+
   // 판정 근거
   panel.appendChild(sectionTitle("판정 근거"));
   const rat = document.createElement("div");
@@ -247,6 +299,82 @@ function sectionTitle(text) {
   el.className = "section-title";
   el.textContent = text;
   return el;
+}
+
+const AXIS_LABELS = {
+  profitability: "수익성",
+  growth: "성장성",
+  stability: "안정성",
+  cashflow: "현금흐름",
+};
+
+const METRIC_LABELS = {
+  roe_avg3: "ROE 3년 평균",
+  op_margin_avg3: "영업이익률 3년 평균",
+  op_margin_trend: "영업이익률 추세",
+  revenue_cagr3: "매출 CAGR 3년",
+  op_income_cagr3: "영업이익 CAGR 3년",
+  growth_consistency: "성장 일관성",
+  debt_ratio: "부채비율",
+  current_ratio: "유동비율",
+  interest_coverage: "이자보상배율",
+  ocf_positive_years: "OCF 흑자 연속",
+  ocf_to_op_income: "OCF / 영업이익",
+  fcf_positive_years: "FCF 흑자 연속",
+};
+
+// 0점이지만 사업이 나빠서가 아닐 수 있는 지표마다 이유를 단다.
+// 문구가 없으면 "0.0 / 10"만 보여 부실로 읽힌다.
+const METRIC_STATUS_LABELS = {
+  MISSING: "데이터 없음",
+  BASE_NEGATIVE: "3년 전 기저가 적자라 계산 불가 (0점)",
+  END_NONPOSITIVE: "흑자에서 적자로 전환 (0점)",
+  DENOMINATOR_NONPOSITIVE: "3년 누계 영업이익이 0 이하 (0점)",
+};
+
+// 4축 막대. <details>를 쓰는 이유: §11.2의 "막대 클릭 시 지표별 상세
+// 펼침"을 브라우저가 공짜로 준다. 배점은 설정에서 오므로 max_points로
+// 환산한다 - 숫자를 박으면 사용자가 YAML을 고쳐도 막대가 안 따라온다.
+function scoreBars(detailJson) {
+  let card;
+  try {
+    card = typeof detailJson === "string" ? JSON.parse(detailJson) : detailJson;
+  } catch (e) {
+    return "";
+  }
+  if (!card || !card.axes) return "";
+
+  return card.axes.map((axis) => {
+    const label = AXIS_LABELS[axis.axis] ?? axis.axis;
+    const max = axis.max_points ?? 0;
+    const unmeasurable = axis.status === "AXIS_UNMEASURABLE";
+    const scaled = unmeasurable || axis.denominator <= 0
+      ? 0
+      : (axis.earned / axis.denominator) * max;
+    const width = max > 0 ? (scaled / max) * 100 : 0;
+    const note = unmeasurable
+      ? `<span class="axis-note">지표를 절반도 못 구해 측정 불가</span>`
+      : "";
+
+    const rows = (axis.metrics ?? []).map((m) => {
+      const name = METRIC_LABELS[m.metric] ?? m.metric;
+      const status = METRIC_STATUS_LABELS[m.status];
+      const value = status
+        ? `<i>${escapeHtml(status)}</i>`
+        : `${m.points.toFixed(1)} / ${m.max_points.toFixed(0)}`;
+      return `<div class="metric-row"><span>${escapeHtml(name)}</span>${value}</div>`;
+    }).join("");
+
+    return `<details class="axis${unmeasurable ? " unmeasurable" : ""}">
+      <summary>
+        <span class="axis-name">${escapeHtml(label)}</span>
+        <span class="axis-track"><span class="axis-fill" style="width:${width.toFixed(1)}%"></span></span>
+        <span class="axis-score">${scaled.toFixed(1)} / ${max.toFixed(0)}</span>
+        ${note}
+      </summary>
+      ${rows}
+    </details>`;
+  }).join("");
 }
 
 function escapeHtml(s) {
@@ -333,7 +461,16 @@ function wireControls() {
     $("drop-value").textContent = `-${slider.value}%`;
     savePrefs();
     renderHitCount();
-    if (state.chip === "hit") renderList();
+    renderList();   // 등급 뱃지가 임계치를 따라 바뀐다
+  };
+
+  // 서버 왕복 없이 즉시 재판정한다 (설계서 §6.1).
+  $("score-threshold").oninput = () => {
+    state.minScore = Number($("score-threshold").value);
+    $("score-value").textContent = `${state.minScore}점`;
+    savePrefs();
+    renderHitCount();
+    renderList();
   };
 
   $("search").oninput = async () => { await reload(); };
