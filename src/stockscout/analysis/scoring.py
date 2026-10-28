@@ -9,8 +9,11 @@ from __future__ import annotations
 
 from stockscout.config import MetricConfig
 from stockscout.models import (
+    AXIS_UNMEASURABLE,
+    AxisScore,
     Financials,
     MetricScore,
+    ScoreCard,
     STATUS_BASE_NEGATIVE,
     STATUS_DENOMINATOR_NONPOSITIVE,
     STATUS_MISSING,
@@ -220,3 +223,88 @@ def metric_fcf_positive_years(years: list[Financials],
         return _missing("fcf_positive_years", cfg)
     streak = _positive_streak([f.free_cash_flow for f in window])
     return _scored("fcf_positive_years", float(streak), cfg)
+
+
+# 축 이름 -> 지표 이름 -> 계산 함수. 설정의 scoring 섹션 구조와 맞물린다.
+METRIC_FUNCTIONS = {
+    "profitability": {
+        "roe_avg3": metric_roe_avg3,
+        "op_margin_avg3": metric_op_margin_avg3,
+        "op_margin_trend": metric_op_margin_trend,
+    },
+    "growth": {
+        "revenue_cagr3": metric_revenue_cagr3,
+        "op_income_cagr3": metric_op_income_cagr3,
+        "growth_consistency": metric_growth_consistency,
+    },
+    "stability": {
+        "debt_ratio": metric_debt_ratio,
+        "current_ratio": metric_current_ratio,
+        "interest_coverage": metric_interest_coverage,
+    },
+    "cashflow": {
+        "ocf_positive_years": metric_ocf_positive_years,
+        "ocf_to_op_income": metric_ocf_to_op_income,
+        "fcf_positive_years": metric_fcf_positive_years,
+    },
+}
+
+# 축 하한 (설계서 §8.3). 유효만점이 배점의 이 비율 미만이면 축을 0점 처리한다.
+AXIS_FLOOR_RATIO = 0.5
+
+
+def score_security(
+    financials: list[Financials],
+    scoring: dict[str, dict[str, MetricConfig]],
+) -> ScoreCard:
+    """재무 목록을 4축 100점으로 채점한다. 설계서 §8.2·§8.3.
+
+    두 규칙이 서로 반대로 당긴다.
+
+    환산: 못 구한 지표는 획득점수와 유효만점 양쪽에서 뺀다. 계정과목
+    매핑 실패가 사업 부실로 둔갑하지 않게 하려는 것이다.
+
+    축 하한: 한 축의 유효만점이 배점의 절반 미만이면 환산하지 않고 그
+    축을 0점 처리한다. 이때 **배점 전액을 분모에 남긴다** - 분모에서도
+    빼면 0점 처리가 아무 효과가 없어진다(0/0이라 총점이 그대로다).
+    "볼 수 없다"가 면제가 아니라 감점이 되어야 한다.
+    """
+    years = sorted(financials, key=lambda f: f.fiscal_year)
+
+    axes: list[AxisScore] = []
+    for axis_name, metrics_config in scoring.items():
+        if axis_name not in METRIC_FUNCTIONS:
+            raise ValueError(
+                f"설정의 scoring에 모르는 축이 있습니다: {axis_name} "
+                f"(가능: {sorted(METRIC_FUNCTIONS)})"
+            )
+        known = METRIC_FUNCTIONS[axis_name]
+
+        scores: list[MetricScore] = []
+        for metric_name, cfg in metrics_config.items():
+            if metric_name not in known:
+                raise ValueError(
+                    f"설정의 scoring.{axis_name}에 모르는 지표가 있습니다: "
+                    f"{metric_name} (가능: {sorted(known)})"
+                )
+            scores.append(known[metric_name](years, cfg))
+
+        axis_max = sum(m.max_points for m in scores)
+        measurable = [m for m in scores if m.status != STATUS_MISSING]
+        effective_max = sum(m.max_points for m in measurable)
+
+        if effective_max < axis_max * AXIS_FLOOR_RATIO:
+            axes.append(AxisScore(
+                axis=axis_name, metrics=scores,
+                earned=0.0, denominator=axis_max, max_points=axis_max,
+                status=AXIS_UNMEASURABLE,
+            ))
+        else:
+            axes.append(AxisScore(
+                axis=axis_name, metrics=scores,
+                earned=sum(m.points for m in measurable),
+                denominator=effective_max, max_points=axis_max,
+                status=STATUS_OK,
+            ))
+
+    return ScoreCard(axes=axes)
