@@ -217,6 +217,15 @@ function renderDetail(d, prices) {
   ].join("");
   panel.appendChild(kpis);
 
+  // 점수 분해 (설계서 §11.2). 제외된 종목은 채점하지 않았으므로 막대가 없다.
+  if (d.score_detail) {
+    panel.appendChild(sectionTitle("점수 분해"));
+    const bars = document.createElement("div");
+    bars.className = "score-bars";
+    bars.innerHTML = scoreBars(d.score_detail);
+    panel.appendChild(bars);
+  }
+
   // 판정 근거
   panel.appendChild(sectionTitle("판정 근거"));
   const rat = document.createElement("div");
@@ -247,6 +256,82 @@ function sectionTitle(text) {
   el.className = "section-title";
   el.textContent = text;
   return el;
+}
+
+const AXIS_LABELS = {
+  profitability: "수익성",
+  growth: "성장성",
+  stability: "안정성",
+  cashflow: "현금흐름",
+};
+
+const METRIC_LABELS = {
+  roe_avg3: "ROE 3년 평균",
+  op_margin_avg3: "영업이익률 3년 평균",
+  op_margin_trend: "영업이익률 추세",
+  revenue_cagr3: "매출 CAGR 3년",
+  op_income_cagr3: "영업이익 CAGR 3년",
+  growth_consistency: "성장 일관성",
+  debt_ratio: "부채비율",
+  current_ratio: "유동비율",
+  interest_coverage: "이자보상배율",
+  ocf_positive_years: "OCF 흑자 연속",
+  ocf_to_op_income: "OCF / 영업이익",
+  fcf_positive_years: "FCF 흑자 연속",
+};
+
+// 0점이지만 사업이 나빠서가 아닐 수 있는 지표마다 이유를 단다.
+// 문구가 없으면 "0.0 / 10"만 보여 부실로 읽힌다.
+const METRIC_STATUS_LABELS = {
+  MISSING: "데이터 없음",
+  BASE_NEGATIVE: "3년 전 기저가 적자라 계산 불가 (0점)",
+  END_NONPOSITIVE: "흑자에서 적자로 전환 (0점)",
+  DENOMINATOR_NONPOSITIVE: "3년 누계 영업이익이 0 이하 (0점)",
+};
+
+// 4축 막대. <details>를 쓰는 이유: §11.2의 "막대 클릭 시 지표별 상세
+// 펼침"을 브라우저가 공짜로 준다. 배점은 설정에서 오므로 max_points로
+// 환산한다 - 숫자를 박으면 사용자가 YAML을 고쳐도 막대가 안 따라온다.
+function scoreBars(detailJson) {
+  let card;
+  try {
+    card = typeof detailJson === "string" ? JSON.parse(detailJson) : detailJson;
+  } catch (e) {
+    return "";
+  }
+  if (!card || !card.axes) return "";
+
+  return card.axes.map((axis) => {
+    const label = AXIS_LABELS[axis.axis] ?? axis.axis;
+    const max = axis.max_points ?? 0;
+    const unmeasurable = axis.status === "AXIS_UNMEASURABLE";
+    const scaled = unmeasurable || axis.denominator <= 0
+      ? 0
+      : (axis.earned / axis.denominator) * max;
+    const width = max > 0 ? (scaled / max) * 100 : 0;
+    const note = unmeasurable
+      ? `<span class="axis-note">지표를 절반도 못 구해 측정 불가</span>`
+      : "";
+
+    const rows = (axis.metrics ?? []).map((m) => {
+      const name = METRIC_LABELS[m.metric] ?? m.metric;
+      const status = METRIC_STATUS_LABELS[m.status];
+      const value = status
+        ? `<i>${escapeHtml(status)}</i>`
+        : `${m.points.toFixed(1)} / ${m.max_points.toFixed(0)}`;
+      return `<div class="metric-row"><span>${escapeHtml(name)}</span>${value}</div>`;
+    }).join("");
+
+    return `<details class="axis${unmeasurable ? " unmeasurable" : ""}">
+      <summary>
+        <span class="axis-name">${escapeHtml(label)}</span>
+        <span class="axis-track"><span class="axis-fill" style="width:${width.toFixed(1)}%"></span></span>
+        <span class="axis-score">${scaled.toFixed(1)} / ${max.toFixed(0)}</span>
+        ${note}
+      </summary>
+      ${rows}
+    </details>`;
+  }).join("");
 }
 
 function escapeHtml(s) {

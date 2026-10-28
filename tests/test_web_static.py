@@ -209,3 +209,79 @@ def test_app_js_uses_server_computed_reference_lines():
     assert "avg_price_5y" in js
     body = js.split("function drawChart")[1].split("function")[0]
     assert "reduce" not in body
+
+
+# --- 계획 C: 점수 분해 ------------------------------------------------
+
+def js_text() -> str:
+    return (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+
+def _function_body(js: str, name: str) -> str:
+    """"function <name>"부터 중괄호 깊이가 0으로 돌아오는 지점까지.
+
+    split으로 대충 자르면 호출부를 집어 엉뚱한 곳을 검사한다 - 계획 D에서
+    drawChart 검사가 실제로 그랬다 (test_app_js_uses_server_computed_reference_lines).
+    """
+    start = js.index(f"function {name}(")
+    depth = 0
+    for i in range(js.index("{", start), len(js)):
+        if js[i] == "{":
+            depth += 1
+        elif js[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return js[start:i + 1]
+    raise AssertionError(f"{name}의 본문을 찾지 못했습니다")
+
+
+def test_app_js_renders_a_score_breakdown():
+    js = js_text()
+
+    assert "function scoreBars(" in js
+    assert "점수 분해" in _function_body(js, "renderDetail")
+
+
+def test_score_bars_scale_by_max_points_not_a_hardcoded_25():
+    """배점은 설정에서 온다. 사용자가 YAML을 고치면 막대도 따라야 한다."""
+    body = _function_body(js_text(), "scoreBars")
+
+    assert "max_points" in body
+    assert "25" not in body
+
+
+def test_score_bars_label_an_unmeasurable_axis():
+    body = _function_body(js_text(), "scoreBars")
+
+    assert "AXIS_UNMEASURABLE" in body
+    assert "측정 불가" in body
+
+
+def test_score_bars_expand_per_metric_with_details():
+    """설계서 §11.2: 막대 클릭 시 지표별 상세 펼침. 브라우저의 details가 준다."""
+    body = _function_body(js_text(), "scoreBars")
+
+    assert "<details" in body and "<summary" in body
+
+
+def test_every_scoring_status_has_a_label():
+    """서버가 내는 지표 상태마다 화면 문구가 있어야 한다.
+
+    없으면 그 지표는 '0.0 / 10'으로 표시돼 사업이 나쁜 것처럼 읽힌다.
+    END_NONPOSITIVE는 실데이터(삼성SDI)에서 나온 상태라 계획에 없었다.
+    """
+    from stockscout import models
+
+    js = js_text()
+    labels = js.split("const METRIC_STATUS_LABELS")[1].split("};")[0]
+    statuses = [v for k, v in vars(models).items()
+                if k.startswith("STATUS_") and v != models.STATUS_OK]
+
+    for status in statuses:
+        assert f"{status}:" in labels, f"{status}의 화면 문구가 없다"
+
+
+def test_detail_skips_the_breakdown_when_there_is_no_score():
+    body = _function_body(js_text(), "renderDetail")
+
+    assert "if (d.score_detail)" in body
