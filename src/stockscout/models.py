@@ -224,8 +224,8 @@ class PriceStats(BaseModel):
 class Valuation(BaseModel):
     """밸류에이션 지표 (설계서 §9.2). 화면 표시·정렬 전용, 점수에 넣지 않는다.
 
-    shares_outstanding이 없으면 셋 다 None이다. DART의 전체 재무제표
-    API가 발행주식수를 주지 않으므로 당분간 항상 None이다.
+    shares_outstanding이 없으면 셋 다 None이다. 발행주식수는 「주식의
+    총수 현황」에서 따로 수집하므로, 그 수집이 실패한 종목에서만 None이다.
     """
 
     market_cap: float | None = None

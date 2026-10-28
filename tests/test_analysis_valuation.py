@@ -353,3 +353,54 @@ def test_zero_price_does_not_crash():
     assert v.market_cap == pytest.approx(0.0)
     assert v.per == pytest.approx(0.0)
     assert v.pbr == pytest.approx(0.0)
+
+
+def test_market_cap_uses_issued_shares_but_eps_uses_free_float():
+    """설계서 §9.2: 자기주식은 배당도 의결권도 없다."""
+    latest = Financials(
+        ticker="005930.KS", fiscal_year=2024, currency="KRW",
+        revenue=1.0, operating_income=1.0,
+        net_income=1_000.0, total_equity=10_000.0, total_liabilities=1.0,
+        shares_outstanding=1_000.0, shares_treasury=200.0,
+    )
+
+    val = compute_valuation(price=50.0, latest=latest)
+
+    assert val.market_cap == 50_000.0             # 50 x 1,000 (발행)
+    # EPS = 1,000 / 800 = 1.25 -> PER = 50 / 1.25 = 40
+    assert val.per == pytest.approx(40.0)
+    # BPS = 10,000 / 800 = 12.5 -> PBR = 50 / 12.5 = 4
+    assert val.pbr == pytest.approx(4.0)
+
+
+def test_missing_treasury_falls_back_to_issued_shares():
+    """자기주식 수집이 실패해도 PER·PBR을 포기하지 않는다.
+
+    자기주식이 없는 회사와 못 구한 회사를 구분할 방법이 없지만, 대개
+    자기주식 비중은 작다. NULL로 만드는 쪽이 손해가 크다.
+    """
+    latest = Financials(
+        ticker="000660.KS", fiscal_year=2024, currency="KRW",
+        revenue=1.0, operating_income=1.0,
+        net_income=1_000.0, total_equity=10_000.0, total_liabilities=1.0,
+        shares_outstanding=1_000.0, shares_treasury=None,
+    )
+
+    val = compute_valuation(price=50.0, latest=latest)
+
+    assert val.per == pytest.approx(50.0)         # EPS = 1.0
+
+
+def test_treasury_larger_than_issued_falls_back_to_issued():
+    """말이 안 되는 데이터로 0이나 음수로 나누지 않는다."""
+    latest = Financials(
+        ticker="000000.KS", fiscal_year=2024, currency="KRW",
+        revenue=1.0, operating_income=1.0,
+        net_income=1_000.0, total_equity=10_000.0, total_liabilities=1.0,
+        shares_outstanding=1_000.0, shares_treasury=1_000.0,
+    )
+
+    val = compute_valuation(price=50.0, latest=latest)
+
+    assert val.market_cap == 50_000.0
+    assert val.per == pytest.approx(50.0)
