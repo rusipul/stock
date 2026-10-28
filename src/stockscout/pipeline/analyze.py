@@ -12,7 +12,9 @@ from datetime import date, datetime, timezone
 
 from pydantic import BaseModel
 
-from stockscout.analysis.filters import apply_price_filters
+from stockscout.analysis.filters import apply_financial_filters, apply_price_filters
+from stockscout.analysis.grading import grade_signal
+from stockscout.analysis.scoring import score_security
 from stockscout.analysis.valuation import (
     HIGH_WINDOW_YEARS,
     compute_price_stats,
@@ -20,7 +22,7 @@ from stockscout.analysis.valuation import (
     window_start,
 )
 from stockscout.config import Config
-from stockscout.models import AnalysisResult, Snapshot
+from stockscout.models import AnalysisResult, FilterOutcome, ScoreCard, Snapshot
 from stockscout.store.repository import Repository
 
 SUPPORTED_MARKETS = ("KR", "US")
@@ -115,6 +117,27 @@ def analyze_market(
             valuation = compute_valuation(
                 stats.price_current, financials[-1] if financials else None
             )
+
+            # 가격 필터와 재무 필터가 모두 INSUFFICIENT_HISTORY를 낼 수 있다.
+            # dict.fromkeys로 순서를 지키면서 중복만 없앤다 - 화면이 같은
+            # 사유를 두 번 보여주면 안 된다.
+            financial_outcome = apply_financial_filters(
+                financials, config.hard_filters
+            )
+            outcome = FilterOutcome(failures=list(dict.fromkeys(
+                outcome.failures + financial_outcome.failures
+            )))
+
+            # 하드필터에 걸린 종목은 점수를 계산하지 않는다 (설계서 §8.1).
+            # 매겨두면 화면에 "제외됐지만 85점"이라는 모순된 표시가 난다.
+            card = score_security(financials, config.scoring) if outcome.passed else None
+            grade, reason = grade_signal(
+                stats,
+                score_total=card.total if card else None,
+                passed_filters=outcome.passed,
+                config=config.signal,
+                primary_window=config.lookback.primary_window,
+            )
         except Exception as exc:
             repo.record_error(security.ticker, "analyze",
                               f"{type(exc).__name__}: {exc}")
@@ -124,6 +147,14 @@ def analyze_market(
         results.append(AnalysisResult(
             ticker=security.ticker, filters=outcome, stats=stats,
             valuation=valuation,
+            score_total=card.total if card else None,
+            score_profit=_axis_points(card, "profitability"),
+            score_growth=_axis_points(card, "growth"),
+            score_stability=_axis_points(card, "stability"),
+            score_cashflow=_axis_points(card, "cashflow"),
+            score_detail=card.model_dump_json() if card else None,
+            signal_grade=grade,
+            signal_reason=reason,
         ))
         summary.analyzed += 1
         if outcome.passed:
@@ -166,3 +197,13 @@ def _earliest_window_start(as_of: date, windows: list[int]) -> date:
     조용히 보고되고 그 값이 계획 C의 고점 대비 등급 판정에 들어간다.
     """
     return window_start(as_of, max(max(windows), HIGH_WINDOW_YEARS))
+
+
+def _axis_points(card: ScoreCard | None, axis: str) -> float | None:
+    """축 점수 0~배점. 카드가 없거나 그 축이 없으면 None."""
+    if card is None:
+        return None
+    for entry in card.axes:
+        if entry.axis == axis:
+            return entry.points
+    return None

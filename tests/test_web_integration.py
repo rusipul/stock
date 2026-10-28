@@ -32,24 +32,22 @@ def snapshot(client):
 
 def test_snapshot_matches_cli_counts(snapshot):
     assert snapshot["total"] == 42
-    assert snapshot["passed"] == 34
-    assert snapshot["excluded"] == 8
+    # 계획 C에서 재무 필터가 붙어 34/8에서 31/11이 됐다. 늘어난 제외 3종목은
+    # 전부 HIGH_DEBT(한국전력·한화오션·한국항공우주)다.
+    assert snapshot["passed"] == 31
+    assert snapshot["excluded"] == 11
 
 
-def test_scores_are_absent_until_plan_c(snapshot):
-    """인증키는 들어왔지만 점수는 아직 없다 — 이유가 바뀌었다.
+def test_scores_are_present(snapshot):
+    """계획 C가 점수를 채웠다. has_scores가 화면 전체의 스위치다.
 
-    이름이 `..._until_dart_key`였다. 키가 들어왔으니 더는 그 이유가
-    아니다. 지금 점수를 막는 것은 계획 C(하드필터 + 4축 스코어링)이고,
-    밸류에이션을 막는 것은 발행주식수다 (stockTotqySttus.json을 아직
-    수집하지 않는다).
-
-    둘 중 하나라도 켜지면 이 테스트가 의도대로 실패한다. 그때 지우지
-    말고 방향을 뒤집어라 — 화면이 "점수 없음"을 정직하게 말하는지가
-    이 테스트가 지키는 것이다.
+    이름이 `..._absent_until_plan_c`였고 False를 단언했다. 계획 C가
+    점수(4축 스코어링)와 밸류에이션(발행주식수 수집)을 함께 켜서 방향을
+    뒤집었다. 이 값이 true가 되는 순간 우량주 점수 슬라이더, 등급 칩,
+    점수 KPI가 전부 켜진다 (계획 D가 그렇게 만들어 두었다).
     """
-    assert snapshot["has_scores"] is False
-    assert snapshot["has_valuation"] is False
+    assert snapshot["has_scores"] is True
+    assert snapshot["has_valuation"] is True
 
 
 def test_list_returns_every_security(client, snapshot):

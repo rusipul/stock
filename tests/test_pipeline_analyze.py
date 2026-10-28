@@ -3,8 +3,8 @@ from datetime import date, timedelta
 
 import pytest
 
-from stockscout.config import Config
-from stockscout.models import PriceBar, Security
+from stockscout.config import Config, load_config
+from stockscout.models import Financials, PriceBar, Security
 from stockscout.pipeline.analyze import AnalyzeSummary, analyze_market
 from stockscout.store.db import connect, init_db
 from stockscout.store.repository import Repository
@@ -17,20 +17,46 @@ def repo(tmp_path):
         yield Repository(conn)
 
 
+# 배점은 실제 settings.yaml에서 가져온다. Config의 scoring 기본값은 빈
+# dict라, 빼먹으면 축이 하나도 없는 카드가 나와 전 종목이 0점이 된다.
+SCORING = load_config().model_dump(mode="json")["scoring"]
+
+# seed()가 기본으로 넣는 재무 연도. 7년인 이유는 min_history_years=6을
+# 시험하는 테스트가 있어서다 - 재무 이력이 모자라면 재무 필터의
+# INSUFFICIENT_HISTORY가 가격 이력 판정을 가린다.
+HEALTHY_YEARS = range(2019, 2026)
+
+
 def cfg(**overrides) -> Config:
     raw = {"lookback": {"price_years": [1, 3, 5], "primary_window": 5,
                         "min_data_coverage": 0.8},
-           "hard_filters": {"min_history_years": 5}}
+           "hard_filters": {"min_history_years": 5},
+           "scoring": SCORING}
     raw.update(overrides)
     return Config.model_validate(raw)
 
 
+def seed_financials(repo, ticker, years=HEALTHY_YEARS):
+    """하드필터를 전부 통과하는 정상 재무."""
+    repo.save_financials([
+        Financials(
+            ticker=ticker, fiscal_year=y, currency="KRW",
+            revenue=1_000.0, operating_income=150.0, net_income=120.0,
+            total_assets=2_000.0, total_liabilities=500.0, total_equity=1_000.0,
+            current_assets=800.0, current_liabilities=400.0,
+            interest_expense=10.0, operating_cash_flow=180.0, capex=30.0,
+        )
+        for y in years
+    ])
+
+
 def seed(repo, ticker="005930.KS", is_financial=False,
          first=date(2021, 9, 10), last=date(2026, 9, 10), close=100.0,
-         market="KR", in_universe=True):
+         market="KR", in_universe=True, financial_years=HEALTHY_YEARS):
     repo.upsert_security(Security(
         ticker=ticker, market=market, name=ticker, exchange="KOSPI",
         currency="KRW", is_financial=is_financial, in_universe=in_universe))
+    seed_financials(repo, ticker, financial_years)
     d, bars = first, []
     while d <= last:
         bars.append(PriceBar(ticker=ticker, date=d, close=close))
@@ -252,6 +278,7 @@ def test_history_check_is_unaffected_by_gaps_outside_the_average_window(repo):
     repo.upsert_security(Security(
         ticker=ticker, market="KR", name=ticker, exchange="KOSPI",
         currency="KRW"))
+    seed_financials(repo, ticker)   # 재무 이력 부족이 가격 이력 판정을 가리지 않게
 
     repo.save_price_bars(
         [PriceBar(ticker=ticker, date=date(2010, 1, 1), close=999.0)],
@@ -305,6 +332,7 @@ def seed_weekdays(repo, ticker="005930.KS", is_financial=False,
     repo.upsert_security(Security(
         ticker=ticker, market=market, name=ticker, exchange="KOSPI",
         currency="KRW", is_financial=is_financial, in_universe=in_universe))
+    seed_financials(repo, ticker)
     d, bars = first, []
     while d <= last:
         if d.weekday() < 5:
@@ -509,3 +537,89 @@ def test_analyze_as_of_is_scoped_to_market(repo):
     summary = analyze_market(repo, market="KR", config=cfg())
 
     assert summary.as_of == date(2026, 9, 10)
+
+
+# --- 계획 C: 재무 필터·점수·등급 배선 ---------------------------------
+
+
+def test_analyze_scores_a_passing_security(repo):
+    """재무가 있으면 점수가 채워지고 스냅샷에 저장된다."""
+    seed(repo, "005930.KS")
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+
+    assert row["passed_filters"] == 1
+    assert row["score_total"] is not None
+    assert row["score_profit"] is not None
+    detail = json.loads(row["score_detail"])
+    assert {a["axis"] for a in detail["axes"]} == {
+        "profitability", "growth", "stability", "cashflow"}
+
+
+def test_analyze_applies_financial_filters(repo):
+    """가격 이력이 충분해도 재무 이력이 모자라면 제외된다."""
+    seed(repo, "005930.KS", financial_years=range(2024, 2026))
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+
+    assert row["passed_filters"] == 0
+    assert "INSUFFICIENT_HISTORY" in json.loads(row["filter_failures"])
+    assert summary.excluded == 1
+
+
+def test_analyze_does_not_score_an_excluded_security(repo):
+    """설계서 §8.1: 하드필터에 걸리면 점수를 계산하지 않는다.
+
+    점수를 매겨두면 화면에서 '제외됐지만 85점'이라는 모순된 표시가 난다.
+    """
+    seed(repo, "105560.KS", is_financial=True)
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+
+    assert row["passed_filters"] == 0
+    assert row["score_total"] is None
+    assert row["score_detail"] is None
+    assert row["signal_grade"] == "NONE"
+
+
+def test_analyze_merges_price_and_financial_failures_without_duplicates(repo):
+    """두 필터가 모두 INSUFFICIENT_HISTORY를 낼 수 있다."""
+    seed(repo, "000000.KS", first=date(2025, 9, 10),
+         financial_years=range(2024, 2026))
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+    failures = json.loads(row["filter_failures"])
+
+    assert failures.count("INSUFFICIENT_HISTORY") == 1
+
+
+def test_analyze_records_the_grade(repo):
+    seed(repo, "005930.KS")
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+
+    # 종가가 평탄하니 하락이 없다. 우량주라도 등급은 NONE이고, 근거는
+    # 점수와 하락률을 숫자로 말해야 한다.
+    assert row["signal_grade"] == "NONE"
+    assert "점수" in row["signal_reason"]
+    assert "평균 대비" in row["signal_reason"]
+
+
+def test_analyze_grades_a_fallen_quality_stock(repo):
+    """우량주가 평균과 고점 모두에서 40% 넘게 빠지면 별 둘."""
+    seed(repo, "005930.KS", last=date(2026, 9, 9))
+    repo.save_price_bars(
+        [PriceBar(ticker="005930.KS", date=date(2026, 9, 10), close=50.0)],
+        source="pykrx",
+    )
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+
+    assert row["score_total"] >= 70
+    assert row["signal_grade"] == "STRONG"
