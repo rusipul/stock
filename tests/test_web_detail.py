@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -254,3 +256,118 @@ def test_currency_falls_back_to_krw_when_master_missing(db):
     body = response.json()
     assert body["currency"] == "KRW"
     assert body["name"] == "900003.KS"
+
+
+# --- 계획 C: 점수 산출 근거 -------------------------------------------
+
+def _axis(name, earned, denominator, status="OK"):
+    return {"axis": name, "metrics": [], "earned": earned,
+            "denominator": denominator, "max_points": 25.0, "status": status}
+
+
+UNMEASURABLE_DETAIL = json.dumps({"axes": [
+    _axis("profitability", 20.0, 25.0),
+    _axis("growth", 15.0, 25.0),
+    _axis("stability", 18.0, 20.0),
+    _axis("cashflow", 0.0, 25.0, status="AXIS_UNMEASURABLE"),
+]})
+
+
+@pytest.fixture
+def scored(db):
+    """점수가 채워진 두 번째 스냅샷. 최신이므로 API가 이것을 읽는다."""
+    stats = PriceStats(
+        price_current=60.0, avg_price={1: 80.0, 3: 90.0, 5: 100.0},
+        high_5y=200.0, drop_vs_avg={1: -0.25, 3: -1/3, 5: -0.4},
+        drop_vs_high=-0.7)
+    with connect(db) as conn:
+        repo = Repository(conn)
+        repo.save_snapshot(
+            Snapshot(run_at="2026-09-12T02:00:00+00:00", as_of="2026-09-11",
+                     config_hash="h2", config_json="{}"),
+            [
+                AnalysisResult(
+                    ticker="005930.KS", filters=FilterOutcome(failures=[]),
+                    stats=stats, valuation=Valuation(),
+                    score_total=53.0, score_detail=UNMEASURABLE_DETAIL,
+                    signal_grade="NONE",
+                    signal_reason="우량주 점수 53점이 기준 70점에 못 미칩니다"),
+                AnalysisResult(
+                    ticker="105560.KS",
+                    filters=FilterOutcome(failures=["FINANCIAL_SECTOR"]),
+                    stats=stats, valuation=Valuation(),
+                    signal_grade="NONE",
+                    signal_reason="하드필터에 걸려 등급을 매기지 않습니다"),
+            ],
+        )
+    return db
+
+
+def _rationale(client, ticker):
+    return "\n".join(client.get(f"/api/securities/{ticker}").json()["rationale"])
+
+
+def test_rationale_shows_the_score_per_axis(client, scored):
+    joined = _rationale(client, "005930.KS")
+
+    assert "우량주 점수 53점" in joined
+    assert "수익성 20.0점" in joined
+    # 결측으로 유효만점이 20이 된 축은 25점 만점으로 환산해 보여준다
+    assert "안정성 22.5점 (획득 18.0 / 유효만점 20.0)" in joined
+
+
+def test_rationale_names_an_unmeasurable_axis(client, scored):
+    """§8.3의 축 하한에 걸린 축은 왜 0점인지 말해야 한다.
+
+    "현금흐름 0.0 / 25"만 보여주면 사업이 나쁜 것처럼 읽힌다. 실제로는
+    볼 수 없었던 것이다.
+    """
+    line = next(l for l in _rationale(client, "005930.KS").splitlines()
+                if "현금흐름" in l)
+
+    assert "측정 불가" in line
+
+
+def test_rationale_includes_the_signal_reason(client, scored):
+    assert "신호 판정: 우량주 점수 53점이 기준 70점에 못 미칩니다" \
+        in _rationale(client, "005930.KS")
+
+
+def test_rationale_discloses_a_proxy_interest_expense(client, scored):
+    """설계서 §17.3: 금융비용으로 이자보상배율을 계산했으면 그렇게 말한다."""
+    with connect(scored) as conn:
+        Repository(conn).save_financials([
+            Financials(ticker="005930.KS", fiscal_year=2025, currency="KRW",
+                       revenue=300.0, operating_income=30.0,
+                       interest_expense=5.0, proxy_fields=["interest_expense"]),
+        ])
+
+    assert "금융비용" in _rationale(client, "005930.KS")
+
+
+def test_rationale_is_silent_about_proxies_when_none_were_used(client, scored):
+    with connect(scored) as conn:
+        Repository(conn).save_financials([
+            Financials(ticker="005930.KS", fiscal_year=2025, currency="KRW",
+                       revenue=300.0, operating_income=30.0, interest_expense=5.0),
+        ])
+
+    assert "금융비용" not in _rationale(client, "005930.KS")
+
+
+def test_rationale_has_no_score_lines_for_an_excluded_security(client, scored):
+    """제외된 종목은 점수가 없다. 0점이라고 쓰면 사업 평가로 읽힌다.
+
+    "재무 데이터가 없어"라고 쓰면 거짓이다 - 재무는 있고, 하드필터에
+    걸려 채점하지 않은 것이다.
+    """
+    joined = _rationale(client, "105560.KS")
+
+    assert "[제외]" in joined
+    assert "수익성" not in joined
+    assert "재무 데이터가 없어" not in joined
+    assert "채점하지 않았습니다" in joined
+
+
+def test_rationale_is_cp949_safe_when_scored(client, scored):
+    _rationale(client, "005930.KS").encode("cp949")

@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from stockscout.models import AXIS_UNMEASURABLE, Financials
 from stockscout.store.db import DEFAULT_DB_PATH, connect
 from stockscout.store.repository import Repository
 from stockscout.web.schemas import (
@@ -167,6 +168,7 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                 )
             master = repo.get_security(ticker)
             failures = json.loads(row["filter_failures"] or "[]")
+            financials = repo.get_financials(ticker)
 
             return SecurityDetail(
                 ticker=ticker,
@@ -190,7 +192,7 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                 per=row["per"],
                 pbr=row["pbr"],
                 in_watchlist=ticker in repo.watchlist_tickers(),
-                rationale=_rationale(row, failures),
+                rationale=_rationale(row, failures, financials),
                 score_detail=row["score_detail"],
                 financials=[
                     FinancialRow(
@@ -203,7 +205,7 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                         debt_ratio=f.debt_ratio,
                         operating_cash_flow=f.operating_cash_flow,
                     )
-                    for f in repo.get_financials(ticker)
+                    for f in financials
                 ],
             )
 
@@ -290,7 +292,9 @@ def _window_start(as_of: date, years: int) -> date:
         return as_of.replace(year=as_of.year - years, day=28)
 
 
-def _rationale(row: dict, failures: list[str]) -> list[str]:
+def _rationale(
+    row: dict, failures: list[str], financials: list[Financials]
+) -> list[str]:
     """판정 근거를 실제 숫자가 담긴 문장으로 만든다 (설계서 §11.2).
 
     점수만 던지는 화면은 실제 투자 판단에 쓸 수 없다. 계산식을 그대로
@@ -305,8 +309,8 @@ def _rationale(row: dict, failures: list[str]) -> list[str]:
         lines.append(f"[제외] 하드필터 {len(failures)}건에 걸렸습니다: "
                      + ", ".join(failures))
     else:
-        lines.append("[통과] 가격 기반 하드필터를 모두 통과했습니다 "
-                     "(금융업 아님, 5년 이력 충족)")
+        lines.append("[통과] 하드필터를 모두 통과했습니다 "
+                     "(가격·재무 기반)")
 
     for years in (1, 3, 5):
         avg = row[f"avg_price_{years}y"]
@@ -325,6 +329,71 @@ def _rationale(row: dict, failures: list[str]) -> list[str]:
     )
 
     if row["score_total"] is None:
-        lines.append("우량주 점수: 재무 데이터가 없어 계산되지 않았습니다")
+        # 계획 C부터 점수가 없는 것은 하드필터에 걸렸다는 뜻이다. 계획 C
+        # 이전 스냅샷은 통과 종목도 점수가 없으므로 그때만 옛 문장을 쓴다.
+        if failures:
+            lines.append("우량주 점수: 하드필터에 걸려 채점하지 않았습니다")
+        else:
+            lines.append("우량주 점수: 재무 데이터가 없어 계산되지 않았습니다")
 
+    lines.extend(_score_lines(row))
+    lines.extend(_proxy_lines(financials))
+    if row.get("signal_reason"):
+        lines.append(f"신호 판정: {row['signal_reason']}")
     return lines
+
+
+AXIS_LABELS = {
+    "profitability": "수익성",
+    "growth": "성장성",
+    "stability": "안정성",
+    "cashflow": "현금흐름",
+}
+
+
+def _score_lines(row: dict) -> list[str]:
+    """점수 산출 근거. 축별 점수와, 못 잰 축이 있으면 그 사실.
+
+    점수가 없으면 빈 목록을 돌려준다 - 제외된 종목에 "수익성 0점"을
+    쓰면 사업 평가로 읽힌다. 실제로는 채점하지 않은 것이다.
+    """
+    if row.get("score_total") is None or not row.get("score_detail"):
+        return []
+
+    try:
+        card = json.loads(row["score_detail"])
+    except (TypeError, ValueError):
+        return []
+
+    lines = [f"우량주 점수 {row['score_total']:.0f}점 / 100"]
+    for axis in card.get("axes", []):
+        label = AXIS_LABELS.get(axis.get("axis"), axis.get("axis", ""))
+        earned = axis.get("earned", 0.0)
+        denominator = axis.get("denominator", 0.0)
+        max_points = axis.get("max_points", 25.0)
+        if axis.get("status") == AXIS_UNMEASURABLE:
+            lines.append(
+                f"  {label} 0.0점 - 지표를 절반도 못 구해 측정 불가로 0점 처리"
+            )
+            continue
+        scaled = 0.0 if denominator <= 0 else earned / denominator * max_points
+        lines.append(
+            f"  {label} {scaled:.1f}점 "
+            f"(획득 {earned:.1f} / 유효만점 {denominator:.1f})"
+        )
+    return lines
+
+
+def _proxy_lines(financials: list[Financials]) -> list[str]:
+    """대체 계정을 쓴 항목을 밝힌다 (설계서 §17.3).
+
+    이자보상배율이 금융비용으로 계산됐다면 사용자가 그것을 알아야 한다.
+    금융비용은 이자비용에 환차손·파생손실이 더해진 상위 개념이라 배율이
+    실제보다 낮게 나온다.
+    """
+    if not financials or "interest_expense" not in financials[-1].proxy_fields:
+        return []
+    return [
+        "이자비용을 찾지 못해 금융비용으로 대신했습니다. "
+        "이자보상배율이 실제보다 낮게 계산됩니다"
+    ]
