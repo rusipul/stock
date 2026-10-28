@@ -889,3 +889,100 @@ python -m stockscout run                        # universe → collect → analy
 - 지수 편입 이력 확보 후 백테스팅
 - 섹터 상대평가 (같은 섹터 내 백분위)
 - 관심종목 메모·매수 기록
+
+---
+
+## 18. 계획 E — 미국 시장 (2026-10-28)
+
+§15의 6단계다. **②정규화 계층 위쪽(`analysis/`)은 한 줄도 바꾸지 않는다.**
+그것이 §7.1의 "이 아래로는 어떤 코드도 시장을 구분하지 않는다"가 맞았는지에
+대한 검증이며, 계획 E의 완료 기준이다(`git diff -- src/stockscout/analysis/`가
+비어 있어야 한다).
+
+### 18.1 범위
+
+- 유니버스: `config/universe.yaml`에 `US:` 섹션을 두고 **약 40종목**을 직접
+  적는다. 업종을 고루 섞고 금융 몇 종목은 `is_financial`로 표시해 필터를
+  관통시킨다. 매핑 적중률을 실측하고 고친 뒤 S&P 500 전체로 넓히는 것은
+  다음 계획이다 — 한국도 KOSPI 200이 아니라 42종목으로 구조를 검증했다
+- 하지 않는 것: S&P 500 구성종목 자동 수집, 배당, 감사의견, 섹터 자동 판별
+
+### 18.2 실제 SEC 응답에서 확인한 것
+
+`companyfacts`(AAPL, 2026-10-28 수집, 272KB)를 직접 받아 봤다.
+
+1. **User-Agent가 없으면 403이다.** 실측했다. 현재 기본값 `stockscout/0.1`은
+   연락처가 없어 정책 위반이다. `config/.env`의 `SEC_USER_AGENT`에
+   `stockscout rusipul@gmail.com`을 넣는다(사용자 승인)
+2. **10-K 안에 분기 값이 섞여 있다.** `Revenues`의 한 항목은
+   `form=10-K`인데 기간이 2018-07-01 ~ 2018-09-29(한 분기)다. `form`만
+   보면 분기 매출이 연간 매출로 들어간다. 흐름 항목은 **기간이 350~380일**인
+   것만 연간으로 본다
+3. **`fy`는 공시의 회계연도이지 값의 기간이 아니다.** 10-K에는 전기 비교
+   수치가 같은 `fy`로 함께 들어 있다. 기간은 `end`(와 `start`)로 식별한다
+4. **태그가 해마다 바뀐다.** AAPL은 `Revenues`(~2018)에서
+   `RevenueFromContractWithCustomerExcludingAssessedTax`로 옮겼고,
+   `InterestExpense`는 2023년 이후 따로 보고하지 않는다. 우선순위는
+   **회사 단위가 아니라 연도 단위로** 적용한다
+5. **감사의견은 XBRL에 없다.** `audit_opinion`은 None이고, §8.1의 규칙대로
+   감사의견 필터는 건너뛴다(모르는 것으로 떨어뜨리지 않는다)
+6. **미국의 `CommonStockSharesOutstanding`은 자기주식을 뺀 유통주식수다.**
+   한국의 발행주식총수와 뜻이 다르다. 미국은 시가총액도 유통주식수로 내는
+   것이 관행이므로 `shares_outstanding`에 그대로 넣고 `shares_treasury`는
+   None으로 둔다 — §9.2의 폴백이 유통주식수 = 발행주식수로 처리한다
+7. `company_tickers.json`(티커 → CIK)은 10,430종목, 798KB다
+
+### 18.3 수집 — `sources/edgar.py`, `sources/yahoo.py`
+
+**EDGAR (`FundamentalSource`)**
+
+- 실행마다 `company_tickers.json`을 한 번 받아 티커 → CIK를 만든다
+  (DART의 corp_code와 같은 방식). 티커 표기는 `BRK.B` ↔ `BRK-B`를 맞춘다
+- 회사당 `companyfacts` 1회로 전 연도를 받는다. 어댑터가 연도별로 잘라
+  `RawStatement`로 돌려주므로 `FundamentalSource` 인터페이스는 그대로다.
+  `raw_financials`에 `source='edgar'`로 저장한다. 원본 전체가 아니라
+  **매핑 후보 태그만** 담는다(전체는 회사당 수백 KB다)
+- 연간 값 고르기:
+  - 대상 form: `10-K`, `10-K/A`
+  - 흐름 항목: 기간 350~380일
+  - 시점 항목(재무상태표): 그 회계연도 흐름 기간의 `end`와 같은 날짜의 값
+  - `fiscal_year` = `end`의 연도. AAPL 2025-09-27 → 2025, 월마트
+    2025-01-31 → 2025로, 회사가 부르는 회계연도와 맞는다
+  - 같은 (태그, 기간)이 여러 번 공시되면 `filed`가 가장 늦은 값(정정 공시)
+- 속도: 초당 5회(SEC 한도 10회의 절반)로 기존 `ratelimit`을 쓴다
+- `SEC_USER_AGENT`가 없거나 연락처(`@`)가 없으면 `FatalSourceError`로
+  배치를 멈추고 무엇을 넣으라고 안내한다. `load_secrets`는 지금 DART 키를
+  무조건 요구하므로, 시장별로 필요한 비밀값만 요구하게 바꾼다 — 미국만
+  수집하는데 DART 키가 없다고 죽으면 안 된다
+
+**yfinance (`PriceSource`)**
+
+- 수정종가(`auto_adjust=True`). `yfinance`를 의존성에 추가하고 버전을 고정한다
+- 비공식 경로라 깨질 수 있다(§2). 실패는 종목 단위로 격리한다(§13)
+
+### 18.4 정규화 — `normalize/us_mapping.py`
+
+- 필드마다 태그 우선순위 목록을 두고 **연도마다** 첫 매치를 취한다
+- 이자비용은 `InterestExpense` → `InterestExpenseNonoperating` →
+  `InterestExpenseDebt`. 한국의 금융비용 같은 상위 개념 대체값은 두지 않는다
+  — 셋 다 없으면 None이고 이자보상배율 필터는 건너뛴다(§8.1)
+- capex는 `PaymentsToAcquirePropertyPlantAndEquipment`를 양수 크기로
+- 구체적인 목록은 실측 후 확정하고, 적중률을 §17.2처럼 이 절에 남긴다
+
+### 18.5 시장별 스냅샷
+
+- `snapshots`에 `market` 컬럼을 더한다. 기존 행은 마이그레이션에서 `KR`로
+  채운다. `get_latest_snapshot(market)`
+- 미국을 분석해도 한국 결과가 가려지지 않는다. 시장마다 기준일·통화·수집
+  시점이 달라 한 스냅샷에 섞을 이유가 없다
+- API: `/api/snapshot`과 `/api/securities`가 `?market=`(기본 KR)을 받는다
+  (§11.3이 이미 그렇게 적었다). 상세·차트는 티커로 찾으므로 그대로다
+- 화면: 상단에 **KR | US 탭**. USD는 `$1,234.56`으로 표시한다. 고른 탭은
+  localStorage에 기억한다
+
+### 18.6 검증
+
+- 단위 테스트: 실제 AAPL 응답을 줄인 픽스처로 분기 값 배제, 정정 공시 우선,
+  연도별 태그 전환, 시점 항목의 날짜 맞춤을 고정한다
+- 실데이터 관통: 점수 분포, 측정 불가 축 수, 등급을 미국 종목으로 확인한다
+- **`analysis/` 무변경**을 마지막 Task에서 diff로 확인한다
