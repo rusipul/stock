@@ -139,3 +139,12 @@ def test_summary_counts_securities(db, tmp_path):
     summary = export_site(db, tmp_path / "site")
 
     assert summary.securities == 2
+
+
+def test_price_files_are_compacted():
+    """소수 넷째 자리까지, 정수는 정수로. 화면은 센트까지만 보인다."""
+    from stockscout.web.export import _compact
+
+    assert _compact({"series": [{"close": 148.8123779296875, "open": 70700.0,
+                                 "volume": 100, "date": "2026-01-01"}]}) ==         {"series": [{"close": 148.8124, "open": 70700, "volume": 100, "date": "2026-01-01"}]}
+

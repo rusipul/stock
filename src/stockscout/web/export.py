@@ -68,7 +68,7 @@ async def _export(db_path: Path, out: Path) -> ExportSummary:
                 detail = await _get(api, f"/api/securities/{ticker}")
                 prices = await _get(api, f"/api/securities/{ticker}/prices")
                 _write(data / "securities" / f"{ticker}.json", _public(detail))
-                _write(data / "securities" / f"{ticker}.prices.json", prices)
+                _write(data / "securities" / f"{ticker}.prices.json", _compact(prices))
             summary.markets.append(market)
             summary.securities += len(rows)
 
@@ -90,6 +90,25 @@ def _public(body):
     if isinstance(body, list):
         return [_public(item) for item in body]
     return {**body, "in_watchlist": False}
+
+
+PRICE_DECIMALS = 4
+
+
+def _compact(body):
+    """주가 파일을 줄인다. 화면은 센트까지만 보이는데 yfinance 수정주가는
+    148.8123779296875처럼 오고, 원화는 70700.0처럼 .0이 붙는다. 소수 넷째
+    자리로 자르고 정수는 정수로 쓴다 - 실측: 공개 사이트 18MB의 대부분이 이 숫자였다.
+    분석 데이터(DB)는 건드리지 않는다.
+    """
+    if isinstance(body, dict):
+        return {k: _compact(v) for k, v in body.items()}
+    if isinstance(body, list):
+        return [_compact(v) for v in body]
+    if isinstance(body, float):
+        r = round(body, PRICE_DECIMALS)
+        return int(r) if r == int(r) else r
+    return body
 
 
 def _write(path: Path, body) -> None:
