@@ -154,3 +154,40 @@ def test_reported_shares_win_over_the_weighted_average():
 
     assert fin.shares_outstanding == 100.0
     assert fin.proxy_fields == []
+
+
+# --- 영업이익 대체값 (계획 E 후속) ---------------------------------------
+
+
+def test_pretax_income_is_a_marked_proxy_for_operating_income():
+    """JNJ·MRK·PFE·GE·NKE는 손익계산서에 영업이익 줄이 없다."""
+    fin = normalize_edgar_statement(stmt({
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": 32.0}))
+
+    assert fin.operating_income == 32.0
+    assert fin.proxy_fields == ["operating_income"]
+
+
+def test_cvx_style_pretax_tag_is_also_used():
+    fin = normalize_edgar_statement(stmt({
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments": 19.7}))
+
+    assert fin.operating_income == 19.7
+    assert fin.proxy_fields == ["operating_income"]
+
+
+def test_reported_operating_income_wins_over_pretax():
+    fin = normalize_edgar_statement(stmt({
+        "OperatingIncomeLoss": 133.0,
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": 132.0}))
+
+    assert fin.operating_income == 133.0
+    assert fin.proxy_fields == []
+
+
+def test_domestic_pretax_alone_is_not_used():
+    """국내분만으로는 회사 전체 이익이 아니다."""
+    fin = normalize_edgar_statement(stmt({
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesDomestic": 15.0}))
+
+    assert fin.operating_income is None

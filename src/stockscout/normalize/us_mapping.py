@@ -69,6 +69,16 @@ LIABILITIES_AND_EQUITY = "LiabilitiesAndStockholdersEquity"
 # 그래서 proxy_fields에 남겨 화면이 근거에 밝힌다 (한국 §17.3과 같다).
 SHARES_PROXY = "WeightedAverageNumberOfSharesOutstandingBasic"
 
+# 영업이익이 없을 때의 대체값: 법인세비용차감전 계속사업이익(회사 전체).
+# 미국 GAAP는 단계식 손익을 요구하지 않아 JNJ·MRK·PFE·CVX·GE·NKE·XOM은
+# 영업이익 줄이 없다(실측 §18.4). 세전이익은 영업외손익(이자·투자손익)이
+# 섞인 다른 지표라 proxy_fields에 남기고 화면 근거가 밝힌다. 국내분
+# (…Domestic)·해외분(…Foreign)만 있는 태그는 회사 전체가 아니라 쓰지 않는다.
+OPERATING_INCOME_PROXIES = [
+    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+]
+
 
 def pick(facts: dict[str, float], tags: list[str]) -> float | None:
     for tag in tags:
@@ -97,6 +107,11 @@ def normalize_edgar_statement(stmt: RawStatement) -> Financials:
             values["total_liabilities"] = float(total) - values["total_equity"]
 
     proxies: list[str] = []
+    if values["operating_income"] is None:
+        pretax = pick(facts, OPERATING_INCOME_PROXIES)
+        if pretax is not None:
+            values["operating_income"] = pretax
+            proxies.append("operating_income")
     if values["shares_outstanding"] is None and facts.get(SHARES_PROXY) is not None:
         values["shares_outstanding"] = float(facts[SHARES_PROXY])
         proxies.append("shares_outstanding")

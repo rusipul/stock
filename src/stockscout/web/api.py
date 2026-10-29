@@ -400,6 +400,9 @@ def _proxy_lines(financials: list[Financials]) -> list[str]:
         return []
     proxies = financials[-1].proxy_fields
     lines = []
+    if "operating_income" in proxies:
+        lines.append("영업이익을 보고하지 않는 회사라 세전이익으로 대신했습니다. "
+                     "영업외손익이 섞여 이익률·성장률이 근사값입니다")
     if "interest_expense" in proxies:
         lines.append("이자비용을 찾지 못해 금융비용으로 대신했습니다. "
                      "이자보상배율이 실제보다 낮게 계산됩니다")

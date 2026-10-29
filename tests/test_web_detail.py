@@ -385,3 +385,14 @@ def test_rationale_discloses_proxy_shares(client, scored):
     joined = _rationale(client, "005930.KS")
     assert "가중평균" in joined
     assert "금융비용" not in joined
+
+
+def test_rationale_discloses_proxy_operating_income(client, scored):
+    with connect(scored) as conn:
+        Repository(conn).save_financials([
+            Financials(ticker="005930.KS", fiscal_year=2025, currency="KRW",
+                       revenue=300.0, operating_income=30.0,
+                       proxy_fields=["operating_income"]),
+        ])
+
+    assert "세전이익" in _rationale(client, "005930.KS")
