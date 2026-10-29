@@ -14,7 +14,7 @@ from stockscout.pipeline.normalize import normalize_market
 from stockscout.sources.dart import DartSource
 from stockscout.sources.edgar import EdgarSource
 from stockscout.sources.krx import KrxPriceSource, KrxUniverse, to_ticker
-from stockscout.sources.universe import YamlUniverse
+from stockscout.sources.universe import YamlUniverse, load_cik_overrides
 from stockscout.sources.yahoo import YahooPriceSource
 from stockscout.store.db import DEFAULT_DB_PATH, connect, init_db
 from stockscout.store.repository import Repository
@@ -120,7 +120,8 @@ def build_fundamentals(skip: bool, years: list[int], market: str = "KR"):
         print(f"  이유: {exc}", file=sys.stderr)
         return SkippedFundamentals(), []
     if market == "US":
-        return EdgarSource(secrets.sec_user_agent), years
+        return EdgarSource(secrets.sec_user_agent,
+                           cik_overrides=load_cik_overrides()), years
     return DartSource(secrets.dart_api_key), years
 
 

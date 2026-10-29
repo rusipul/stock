@@ -594,3 +594,13 @@ def test_us_fiscal_years_include_the_current_year():
     """
     assert fiscal_years(count=5, today=date(2026, 9, 10), market="US") == [
         2021, 2022, 2023, 2024, 2025, 2026]
+
+
+def test_build_fundamentals_passes_the_cik_overrides(monkeypatch):
+    from stockscout.cli import build_fundamentals
+
+    monkeypatch.setenv("SEC_USER_AGENT", "stockscout me@example.com")
+
+    source, _ = build_fundamentals(skip=False, years=[2025], market="US")
+
+    assert source.cik_overrides["XOM"] == 34088

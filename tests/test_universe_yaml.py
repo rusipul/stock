@@ -246,3 +246,23 @@ def test_the_real_universe_has_a_us_section():
     assert 35 <= len(secs) <= 45
     assert any(s.is_financial for s in secs)
     assert all("." not in s.ticker for s in secs)
+
+
+def test_cik_overrides_are_read_from_the_us_section(tmp_path):
+    from stockscout.sources.universe import load_cik_overrides
+
+    path = _write_universe(tmp_path, US_YAML + "  cik:\n    xom: 34088\n")
+
+    assert load_cik_overrides(path) == {"XOM": 34088}
+
+
+def test_no_cik_section_means_no_overrides(tmp_path):
+    from stockscout.sources.universe import load_cik_overrides
+
+    assert load_cik_overrides(_write_universe(tmp_path, US_YAML)) == {}
+
+
+def test_the_real_universe_points_xom_at_the_old_cik():
+    from stockscout.sources.universe import load_cik_overrides
+
+    assert load_cik_overrides()["XOM"] == 34088

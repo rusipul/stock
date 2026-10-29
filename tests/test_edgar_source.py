@@ -125,3 +125,15 @@ def test_a_company_with_no_annual_facts_is_a_permanent_failure():
 
 def test_years_missing_from_a_reporting_company_are_not_a_failure():
     assert make_source(routes()).fetch_annual("AAPL", [2019]) == []
+
+
+def test_a_cik_override_wins_over_the_ticker_list():
+    """XOM은 SEC 목록이 아직 10-K가 없는 신설 지주사를 가리킨다 (설계서 §18.4)."""
+    seen = []
+    src = EdgarSource(UA, rate_per_sec=1000.0, cik_overrides={"ZZZZ": 34088},
+                      client=httpx.Client(transport=httpx.MockTransport(
+                          routes(seen=seen))))
+
+    stmts = src.fetch_annual("ZZZZ", [2025])
+
+    assert stmts and any("CIK0000034088.json" in str(r.url) for r in seen)

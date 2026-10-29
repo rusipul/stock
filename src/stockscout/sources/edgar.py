@@ -157,6 +157,7 @@ class EdgarSource:
         user_agent: str,
         rate_per_sec: float = 5.0,
         client: httpx.Client | None = None,
+        cik_overrides: dict[str, int] | None = None,
     ) -> None:
         # SEC 한도는 초당 10회다. 절반으로 둔다.
         self._headers = {"User-Agent": user_agent,
@@ -165,11 +166,16 @@ class EdgarSource:
         self._client = client or httpx.Client(timeout=30)
         self._retry_delay = 1.0
         self.ciks: dict[str, int] = {}
+        # SEC 티커 목록보다 먼저 본다. 지주사 전환 등으로 목록의 CIK가
+        # 아직 10-K가 없는 회사를 가리킬 때 쓴다 (실측: XOM, 설계서 §18.4).
+        self.cik_overrides = {k.upper(): v for k, v in (cik_overrides or {}).items()}
 
     def fetch_annual(self, ticker: str, years: list[int]) -> list[RawStatement]:
-        if not self.ciks:
-            self.ciks = parse_company_tickers(self._get_json(TICKERS_URL))
-        cik = self.ciks.get(ticker.upper())
+        cik = self.cik_overrides.get(ticker.upper())
+        if cik is None:
+            if not self.ciks:
+                self.ciks = parse_company_tickers(self._get_json(TICKERS_URL))
+            cik = self.ciks.get(ticker.upper())
         if cik is None:
             raise PermanentSourceError(f"SEC 티커 목록에 없습니다: {ticker}")
 

@@ -102,3 +102,18 @@ class YamlUniverse:
             # 손으로 고른 목록이라 조회 실패는 일시적 네트워크 문제일 뿐,
             # 종목이 잘못된 게 아니다. KrxUniverse와 달리 건너뛰지 않는다.
             return code
+
+
+def load_cik_overrides(path: Path | str = DEFAULT_UNIVERSE_PATH) -> dict[str, int]:
+    """universe.yaml US 섹션의 cik: {티커: CIK}. 없으면 빈 dict.
+
+    SEC 티커 목록의 CIK가 틀릴 때 쓴다 - XOM은 목록이 아직 10-K가 없는
+    신설 지주사를 가리킨다(설계서 §18.4). 유니버스와 같은 파일에 두는
+    이유: 어느 종목을 볼지와 그 종목을 어디서 찾을지는 함께 바뀐다.
+    """
+    path = Path(path)
+    if not path.exists():
+        return {}
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    section = raw.get("US") or {}
+    return {str(k).upper(): int(v) for k, v in (section.get("cik") or {}).items()}
