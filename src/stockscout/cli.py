@@ -12,8 +12,10 @@ from stockscout.pipeline.analyze import analyze_market
 from stockscout.pipeline.collect import collect_market, sync_universe
 from stockscout.pipeline.normalize import normalize_market
 from stockscout.sources.dart import DartSource
+from stockscout.sources.edgar import EdgarSource
 from stockscout.sources.krx import KrxPriceSource, KrxUniverse, to_ticker
 from stockscout.sources.universe import YamlUniverse
+from stockscout.sources.yahoo import YahooPriceSource
 from stockscout.store.db import DEFAULT_DB_PATH, connect, init_db
 from stockscout.store.repository import Repository
 
@@ -45,10 +47,18 @@ def price_window(years: int, today: date | None = None) -> tuple[date, date]:
     return start, end
 
 
-def fiscal_years(count: int, today: date | None = None) -> list[int]:
-    """수집할 회계연도. 올해 사업보고서는 아직 공시되지 않았으므로 작년부터."""
-    last = (today or date.today()).year - 1
-    return list(range(last - count + 1, last + 1))
+def fiscal_years(count: int, today: date | None = None, market: str = "KR") -> list[int]:
+    """수집할 회계연도. 올해 사업보고서는 아직 공시되지 않았으므로 작년부터.
+
+    미국은 올해까지 본다. 회계연도가 결산일의 연도라(sources/edgar.py)
+    1월 결산 회사(월마트·엔비디아)의 2026-01 결산분은 FY2026이다. 작년까지만
+    요청하면 이미 나온 최신 10-K가 빠진다. 아직 없는 연도는 EDGAR가
+    돌려주지 않을 뿐이다.
+    """
+    year = (today or date.today()).year
+    first = year - count
+    last = year if market == "US" else year - 1
+    return list(range(first, last + 1))
 
 
 def build_universe(source: str, market: str):
@@ -85,24 +95,30 @@ class SkippedFundamentals:
         raise AssertionError("years=[] 이므로 호출되지 않아야 한다")
 
 
-def build_fundamentals(skip: bool, years: list[int]):
+def build_fundamentals(skip: bool, years: list[int], market: str = "KR"):
     """재무 소스와 수집할 회계연도를 정한다.
 
-    주가(pykrx)는 DART 키가 필요 없다. 키 하나가 없다고 수집 전체를
-    막을 이유가 없으므로, 키가 없으면 재무만 건너뛰고 주가는 받는다.
-    수집은 증분이라, 나중에 키를 넣고 다시 돌리면 주가는 건너뛰고
-    재무만 채워진다.
+    주가는 재무 소스의 비밀값이 필요 없다. 비밀값 하나가 없다고 수집
+    전체를 막을 이유가 없으므로, 없으면 재무만 건너뛰고 주가는 받는다.
+    수집은 증분이라, 나중에 값을 넣고 다시 돌리면 재무만 채워진다.
     """
     if skip:
         print("재무제표를 건너뜁니다 (--skip-financials). 주가만 수집합니다.")
         return SkippedFundamentals(), []
     try:
-        secrets = load_secrets()
+        secrets = load_secrets(market=market)
     except ValueError as exc:
         print("재무제표를 건너뜁니다. 주가만 수집합니다.", file=sys.stderr)
         print(f"  이유: {exc}", file=sys.stderr)
         return SkippedFundamentals(), []
+    if market == "US":
+        return EdgarSource(secrets.sec_user_agent), years
     return DartSource(secrets.dart_api_key), years
+
+
+def build_prices(market: str):
+    """시장의 주가 소스. 한국 pykrx, 미국 yfinance (설계서 §5.1)."""
+    return YahooPriceSource() if market == "US" else KrxPriceSource()
 
 
 def resolve_tickers(
@@ -179,8 +195,14 @@ def serve(db_path: str, host: str, port: int) -> None:
     uvicorn.Server(uvicorn.Config(app, log_level="warning")).run(sockets=[sock])
 
 
-def render_ranking(repo, snapshot_id: int, top: int, window: int) -> str:
-    """하락률 상위 종목표. ASCII 기호만 쓴다 (콘솔이 cp949다)."""
+def render_ranking(repo, snapshot_id: int, top: int, window: int,
+                   market: str = "KR") -> str:
+    """하락률 상위 종목표. ASCII 기호만 쓴다 (콘솔이 cp949다).
+
+    달러는 센트까지 보인다. 20달러짜리 종목을 정수로 찍으면 평균과 현재가가
+    같아 보인다.
+    """
+    money = ",.2f" if market == "US" else ",.0f"
     rows = [r for r in repo.get_analysis_results(snapshot_id)
             if r["passed_filters"] and r[f"drop_vs_avg_{window}y"] is not None]
     rows.sort(key=lambda r: r[f"drop_vs_avg_{window}y"])
@@ -192,8 +214,8 @@ def render_ranking(repo, snapshot_id: int, top: int, window: int) -> str:
     for r in rows[:top]:
         lines.append(
             f"{names.get(r['ticker'], r['ticker']):<18}"
-            f"{r['price_current']:>12,.0f}"
-            f"{r[f'avg_price_{window}y']:>12,.0f}"
+            f"{r['price_current']:>12{money}}"
+            f"{r[f'avg_price_{window}y']:>12{money}}"
             f"{r[f'drop_vs_avg_{window}y'] * 100:>9.1f}%"
             f"{r['drop_vs_high'] * 100:>9.1f}%"
         )
@@ -260,13 +282,15 @@ def main(argv: list[str] | None = None) -> int:
             start, end = price_window(max(config.lookback.price_years))
             fundamentals, years = build_fundamentals(
                 skip=args.skip_financials,
-                years=fiscal_years(config.lookback.financial_years),
+                years=fiscal_years(config.lookback.financial_years,
+                                   market=args.market),
+                market=args.market,
             )
             summary = collect_market(
                 repo,
                 market=args.market,
                 fundamentals=fundamentals,
-                prices=KrxPriceSource(),
+                prices=build_prices(args.market),
                 years=years,
                 price_start=start,
                 price_end=end,
@@ -289,7 +313,8 @@ def main(argv: list[str] | None = None) -> int:
             if summary.snapshot_id is not None and args.top > 0:
                 print()
                 print(render_ranking(repo, summary.snapshot_id, args.top,
-                                     config.lookback.primary_window))
+                                     config.lookback.primary_window,
+                                     market=args.market))
 
         elif args.command == "serve":
             serve(args.db, host=args.host, port=args.port)

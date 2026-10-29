@@ -508,3 +508,72 @@ def test_serve_does_not_claim_success_when_the_port_is_taken(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "실행 중입니다" not in out
     assert str(port) in str(exc.value)
+
+
+# --- 시장별 소스 (계획 E) ---------------------------------------------
+
+
+def test_build_fundamentals_uses_edgar_for_us(monkeypatch):
+    from stockscout.cli import build_fundamentals
+    from stockscout.sources.edgar import EdgarSource
+
+    monkeypatch.delenv("DART_API_KEY", raising=False)
+    monkeypatch.setenv("SEC_USER_AGENT", "stockscout me@example.com")
+
+    source, years = build_fundamentals(skip=False, years=[2025], market="US")
+
+    assert isinstance(source, EdgarSource)
+    assert years == [2025]
+
+
+def test_build_fundamentals_skips_us_without_a_contact(tmp_path, monkeypatch):
+    from stockscout.cli import SkippedFundamentals, build_fundamentals
+
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    source, years = build_fundamentals(skip=False, years=[2025], market="US")
+
+    assert isinstance(source, SkippedFundamentals)
+    assert years == []
+
+
+def test_build_prices_picks_the_market_source():
+    from stockscout.cli import build_prices
+    from stockscout.sources.krx import KrxPriceSource
+    from stockscout.sources.yahoo import YahooPriceSource
+
+    assert isinstance(build_prices("KR"), KrxPriceSource)
+    assert isinstance(build_prices("US"), YahooPriceSource)
+
+
+def test_render_ranking_shows_cents_for_us(repo):
+    from stockscout.cli import render_ranking
+    from stockscout.models import (
+        AnalysisResult, FilterOutcome, PriceStats, Security, Snapshot, Valuation)
+
+    repo.upsert_security(Security(ticker="AAPL", market="US", name="Apple",
+                                  currency="USD"))
+    sid = repo.save_snapshot(
+        Snapshot(run_at="x", config_hash="h", config_json="{}", market="US"),
+        [AnalysisResult(
+            ticker="AAPL", filters=FilterOutcome(failures=[]),
+            stats=PriceStats(price_current=230.55, avg_price={5: 250.25},
+                             high_5y=260.0, drop_vs_avg={5: -0.08},
+                             drop_vs_high=-0.11),
+            valuation=Valuation())])
+
+    text = render_ranking(repo, sid, top=5, window=5, market="US")
+
+    assert "230.55" in text and "250.25" in text
+
+
+def test_us_fiscal_years_include_the_current_year():
+    """월마트·엔비디아는 1월에 결산한다. 2026-01 결산분은 FY2026이다.
+
+    회계연도는 결산일의 연도다(sources/edgar.annual_facts). 작년까지만
+    요청하면 이미 공시된 최신 10-K가 빠져 재무가 1년 묵는다. 아직 없는
+    연도는 EDGAR가 돌려주지 않을 뿐이라 요청해도 해가 없다.
+    """
+    assert fiscal_years(count=5, today=date(2026, 9, 10), market="US") == [
+        2021, 2022, 2023, 2024, 2025, 2026]
