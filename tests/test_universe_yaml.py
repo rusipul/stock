@@ -171,3 +171,78 @@ def test_real_universe_yaml_loads_via_yaml_universe():
     assert len(secs) == 42
     financial_count = sum(1 for s in secs if s.is_financial)
     assert financial_count == 7
+
+
+US_YAML = """
+US:
+  exchange: US
+  currency: USD
+  tickers:
+    - AAPL
+    - brk-b
+    - JPM
+  names:
+    AAPL: Apple
+    BRK-B: Berkshire Hathaway
+  is_financial:
+    - BRK-B
+    - JPM
+"""
+
+
+def test_us_tickers_keep_their_symbol_without_a_suffix(tmp_path):
+    path = _write_universe(tmp_path, US_YAML)
+
+    secs = YamlUniverse(path=path, market="US").fetch()
+
+    assert [s.ticker for s in secs] == ["AAPL", "BRK-B", "JPM"]
+    assert all(s.currency == "USD" and s.market == "US" for s in secs)
+
+
+def test_us_names_come_from_the_yaml(tmp_path):
+    """pykrx는 미국 종목을 모른다. 이름이 없으면 티커를 이름으로 쓴다."""
+    path = _write_universe(tmp_path, US_YAML)
+
+    secs = {s.ticker: s for s in YamlUniverse(path=path, market="US").fetch()}
+
+    assert secs["AAPL"].name == "Apple"
+    assert secs["BRK-B"].name == "Berkshire Hathaway"
+    assert secs["JPM"].name == "JPM"
+
+
+def test_us_name_lookup_never_calls_pykrx(tmp_path):
+    path = _write_universe(tmp_path, US_YAML)
+
+    def explode(code):
+        raise AssertionError("미국 종목에 pykrx 이름 조회를 쓰면 안 된다")
+
+    YamlUniverse(path=path, market="US", name_fn=explode).fetch()
+
+
+def test_us_financial_flags_match_after_upper_casing(tmp_path):
+    path = _write_universe(tmp_path, US_YAML)
+
+    secs = {s.ticker: s for s in YamlUniverse(path=path, market="US").fetch()}
+
+    assert secs["BRK-B"].is_financial is True
+    assert secs["JPM"].is_financial is True
+    assert secs["AAPL"].is_financial is False
+
+
+def test_kr_names_in_yaml_override_pykrx(tmp_path):
+    """names는 시장과 무관하게 먼저 본다. 조회 실패를 피하고 싶을 때 쓴다."""
+    path = _write_universe(tmp_path, SAMPLE_YAML + '  names:\n    "005930": 삼성전자\n')
+
+    secs = YamlUniverse(path=path, market="KR",
+                        name_fn=lambda code: f"pykrx-{code}").fetch()
+
+    assert secs[0].name == "삼성전자"
+    assert secs[1].name == "pykrx-000660"
+
+
+def test_the_real_universe_has_a_us_section():
+    secs = YamlUniverse(market="US").fetch()
+
+    assert 35 <= len(secs) <= 45
+    assert any(s.is_financial for s in secs)
+    assert all("." not in s.ticker for s in secs)
