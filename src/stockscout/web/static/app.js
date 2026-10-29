@@ -22,6 +22,16 @@ function money(v) {
   }
   return v.toLocaleString("ko-KR", { maximumFractionDigits: 0 });
 }
+
+// 재무제표 금액. 미국은 10-K의 관례대로 백만 달러로 쓴다 -
+// $82,584,000,000.00은 읽을 수 없다. 한국은 지금처럼 원 단위 그대로다.
+function amount(v) {
+  if (v === null || v === undefined) return "—";
+  if (state.market === "US") {
+    return "$" + Math.round(v / 1e6).toLocaleString("en-US") + "M";
+  }
+  return money(v);
+}
 const signClass = (v) => (v === null || v === undefined) ? "" : (v < 0 ? "neg" : "pos");
 
 // 슬라이더 값은 다음 방문에 복원한다. 설정 파일 기본값은 건드리지 않는다 (설계서 §11.1).
@@ -433,12 +443,12 @@ function financialsTable(rows) {
 
   table.innerHTML =
     `<tr><th>항목</th>${years.map((y) => `<th>${y}</th>`).join("")}</tr>` +
-    line("매출", (r) => money(r.revenue)) +
-    line("영업이익", (r) => money(r.operating_income)) +
+    line("매출", (r) => amount(r.revenue)) +
+    line("영업이익", (r) => amount(r.operating_income)) +
     line("영업이익률", (r) => pct(r.operating_margin)) +
     line("ROE", (r) => pct(r.roe)) +
     line("부채비율", (r) => r.debt_ratio === null ? "—" : r.debt_ratio.toFixed(1) + "%") +
-    line("영업현금흐름", (r) => money(r.operating_cash_flow));
+    line("영업현금흐름", (r) => amount(r.operating_cash_flow));
   return table;
 }
 

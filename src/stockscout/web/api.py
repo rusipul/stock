@@ -208,7 +208,8 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                 per=row["per"],
                 pbr=row["pbr"],
                 in_watchlist=ticker in repo.watchlist_tickers(),
-                rationale=_rationale(row, failures, financials),
+                rationale=_rationale(row, failures, financials,
+                                     currency=master.currency if master else "KRW"),
                 score_detail=row["score_detail"],
                 financials=[
                     FinancialRow(
@@ -298,7 +299,8 @@ def _window_start(as_of: date, years: int) -> date:
 
 
 def _rationale(
-    row: dict, failures: list[str], financials: list[Financials]
+    row: dict, failures: list[str], financials: list[Financials],
+    currency: str = "KRW",
 ) -> list[str]:
     """판정 근거를 실제 숫자가 담긴 문장으로 만든다 (설계서 §11.2).
 
@@ -309,6 +311,9 @@ def _rationale(
     한국어 Windows 콘솔은 cp949라 체크표시 같은 문자를 출력하면 죽는다.
     """
     lines: list[str] = []
+    # 달러는 센트까지. 정수로 찍으면 $249.76 / $268.83이 250 / 269가 되어
+    # 사용자가 계산을 다시 해볼 수 없다.
+    price = ",.2f" if currency == "USD" else ",.0f"
 
     if failures:
         lines.append(f"[제외] 하드필터 {len(failures)}건에 걸렸습니다: "
@@ -324,13 +329,13 @@ def _rationale(
             lines.append(f"{years}년 평균 대비: 데이터 커버리지 미달로 계산하지 않음")
             continue
         lines.append(
-            f"{years}년 평균 대비  {row['price_current']:,.0f}"
-            f" / {avg:,.0f} - 1 = {drop * 100:.1f}%"
+            f"{years}년 평균 대비  {row['price_current']:{price}}"
+            f" / {avg:{price}} - 1 = {drop * 100:.1f}%"
         )
 
     lines.append(
-        f"5년 고점 대비  {row['price_current']:,.0f}"
-        f" / {row['high_5y']:,.0f} - 1 = {row['drop_vs_high'] * 100:.1f}%"
+        f"5년 고점 대비  {row['price_current']:{price}}"
+        f" / {row['high_5y']:{price}} - 1 = {row['drop_vs_high'] * 100:.1f}%"
     )
 
     if row["score_total"] is None:

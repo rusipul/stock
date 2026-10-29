@@ -118,3 +118,16 @@ def test_missing_market_snapshot_says_which_command_to_run(tmp_path):
 
 def test_unknown_market_is_rejected(client):
     assert client.get("/api/snapshot", params={"market": "JP"}).status_code == 422
+
+
+def test_us_rationale_shows_cents(client):
+    """원화처럼 정수로 찍으면 $249.76 / $268.83이 250 / 269가 되어 계산을 검증할 수 없다."""
+    lines = client.get("/api/securities/AAPL").json()["rationale"]
+
+    assert any("230.50 / 230.50" in line for line in lines), lines
+
+
+def test_kr_rationale_stays_whole_won(client):
+    lines = client.get("/api/securities/005930.KS").json()["rationale"]
+
+    assert any("60,000 / 60,000" in line for line in lines), lines

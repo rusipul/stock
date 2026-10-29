@@ -416,3 +416,30 @@ def test_the_chosen_market_survives_a_reload():
 
     assert "stockscout.market" in _function_body(js, "loadPrefs")
     assert "stockscout.market" in _function_body(js, "savePrefs")
+
+
+def test_financial_amounts_are_in_millions_of_dollars_for_us():
+    """10-K의 관례대로 백만 달러로 쓴다. $82,584,000,000.00은 읽을 수 없다."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node 가 없어 금액 형식 실행 검사를 건너뛴다")
+
+    js = js_text()
+    script = (
+        'const state = { market: "US" };\n'
+        f"{_function_body(js, 'money')}\n{_function_body(js, 'amount')}\n"
+        "console.log(amount(82584000000)); console.log(amount(null));"
+        "state.market = 'KR'; console.log(amount(279604799000000));"
+    )
+    out = subprocess.run([node, "-e", script], capture_output=True,
+                         text=True, encoding="utf-8")
+
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.split() == ["$82,584M", "—", "279,604,799,000,000"]
+
+
+def test_the_financials_table_formats_amounts_with_amount():
+    body = _function_body(js_text(), "financialsTable")
+
+    assert "money(" not in body
+    assert body.count("amount(") == 3
