@@ -678,3 +678,45 @@ def test_the_chart_draws_volume_bars():
     body = _function_body(js_text(), "drawChart")
 
     assert "volume" in body and '"bar"' in body
+
+
+
+# --- 차트 확대·가로선 -------------------------------------------------------
+
+
+def test_period_buttons_pick_the_last_n_months():
+    """마지막 날짜에서 거슬러 N개월 안의 첫 인덱스부터 끝까지."""
+    js = js_text()
+    script = (
+        f"{_function_body(js, 'periodRange')}\n"
+        "const d = ['2025-10-27','2026-04-27','2026-07-27','2026-09-28','2026-10-27'];\n"
+        "console.log(JSON.stringify([periodRange(d, 'all'), periodRange(d, 1),"
+        " periodRange(d, 3), periodRange(d, 12), periodRange(d, 60)]));"
+    )
+
+    assert _run_node(script).strip() == "[[0,4],[3,4],[2,4],[0,4],[0,4]]"
+
+
+def test_the_chart_has_period_buttons_drag_zoom_and_reset():
+    body = _function_body(js_text(), "renderDetail")
+    assert "chart-tools" in body
+    js = js_text()
+    for name in ("periodRange", "applyChartRange", "onChartMouseDown",
+                 "onChartMouseUp", "onChartDoubleClick"):
+        assert f"function {name}(" in js
+
+
+def test_the_chart_draws_a_horizontal_line_under_the_mouse():
+    """마우스 위치에 가로선과 그 높이의 가격을 그린다(crosshair 플러그인)."""
+    body = _function_body(js_text(), "drawChart")
+
+    assert "crosshairPlugin" in body
+    plugin = _function_body(js_text(), "crosshairAfterDraw")
+    assert "getValueForPixel" in plugin and "chartArea" in plugin
+
+
+def test_the_chosen_period_survives_a_reload():
+    js = js_text()
+
+    assert "stockscout.chartPeriod" in _function_body(js, "loadPrefs")
+    assert "stockscout.chartPeriod" in _function_body(js, "savePrefs")
