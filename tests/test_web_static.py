@@ -586,3 +586,8 @@ def test_the_detail_shows_recent_results_against_last_year():
     body = _function_body(js_text(), "renderDetail")
 
     assert "interim" in body and "deteriorated" in body
+
+
+def test_the_chart_is_drawn_without_animation():
+    """실측: 애니메이션 중 멈춰 선이 2023년에서 끊긴 채 남았다(1,159점)."""
+    assert "animation: false" in _function_body(js_text(), "drawChart")

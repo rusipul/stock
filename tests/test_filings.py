@@ -166,6 +166,8 @@ def test_kr_catalyst_titles(title):
     "임원ㆍ주요주주특정증권등소유상황보고서",
     "주식등의대량보유상황보고서(약식)",
     "최대주주등소유주식변동신고서",
+    "임원ㆍ주요주주특정증권등거래계획보고서",
+    "기업설명회(IR)개최",
 ])
 def test_kr_ownership_reports_are_noise(title):
     assert is_noise(Filing(ticker="X.KS", filed=date(2026, 9, 1), title=title, url="u"))

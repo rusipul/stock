@@ -616,6 +616,9 @@ function drawChart(p) {
     type: "line",
     data: { labels, datasets },
     options: {
+      // 애니메이션을 끈다. 1,200점짜리 선 6개를 애니메이션할 이유가 없고,
+      // 화면 없는 브라우저(검증 스크립트)에서는 그리다 멈춰 선이 중간에서 끊겼다.
+      animation: false,
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
