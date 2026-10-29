@@ -969,7 +969,52 @@ python -m stockscout run                        # universe → collect → analy
   `InterestExpenseDebt`. 한국의 금융비용 같은 상위 개념 대체값은 두지 않는다
   — 셋 다 없으면 None이고 이자보상배율 필터는 건너뛴다(§8.1)
 - capex는 `PaymentsToAcquirePropertyPlantAndEquipment`를 양수 크기로
-- 구체적인 목록은 실측 후 확정하고, 적중률을 §17.2처럼 이 절에 남긴다
+- 구체적인 목록은 `us_mapping.TAG_MAP`이 정본이다. 실측 적중률은 아래와 같다
+
+**실측 (2026-10-29, 40종목 · 39종목 205개 연도)**
+
+| 필드 | 채워짐 | 비금융 결측 | 결측의 정체 |
+|---|---|---|---|
+| `revenue`·`net_income`·`total_assets`·`total_liabilities`·`total_equity`·`operating_cash_flow` | 200~205 | 0 | (`revenue` 결측 5건은 금융) |
+| `operating_income` | 153 | 32 | **영업이익 줄이 없는 손익계산서.** JNJ·MRK·PFE·CVX·GE·NKE 전 연도, HON 2021. 미국 GAAP는 단계식 손익을 요구하지 않는다 |
+| `current_assets`·`current_liabilities` | 185 | 0 | 금융 4종목 (유동성 구분 없는 재무상태표) |
+| `interest_expense` | 183 | 18 | AAPL 2024~, CAT·GE·NKE. 있는 것은 `InterestPaidNet`(현금 지급액)뿐이다 |
+| `capex` | 194 | 1 | NVDA 2021 |
+| `shares_outstanding` | 200 | 0 | 금융 5건. META·NKE·EL·UPS는 대체값(아래) |
+
+XOM은 0건이다. SEC 티커 목록의 XOM이 2026년 신설 지주사
+(ExxonMobil Holdings Corp, CIK 2115436)로 바뀌어 아직 10-K가 없다. 옛
+Exxon Mobil Corp의 재무는 옛 CIK에 있다. 연간 값이 하나도 없으면
+`EdgarSource`가 `PermanentSourceError`로 남긴다 - 전에는 빈 목록을 조용히
+돌려줘 `collect_errors`에 흔적이 없었다. CIK 수동 지정은 계획 F의 과제다.
+
+매핑에 더한 태그:
+- `InterestAndDebtExpense` → 이자비용 (BA·HON). 이자비용과 같은 개념이다
+- `PaymentsToAcquireOtherProductiveAssets` → capex (VZ. 공시의 설비투자와 같은 값)
+- `WeightedAverageNumberOfSharesOutstandingBasic` → 주식수, **대체값**
+  (META·NKE·EL·UPS). 주식 클래스가 여럿이면 기말 주식수가 클래스별로만
+  보고돼 companyfacts에 회사 전체 값이 없다. 기본 EPS의 분모라 PER에는
+  정의대로 맞고 시가총액·PBR에는 근사값이다. `proxy_fields`에 남고 화면
+  근거가 밝힌다(§17.3과 같은 방식)
+
+일부러 넣지 않은 것:
+- 영업이익 자리의 세전이익(`IncomeLossFromContinuingOperationsBeforeIncomeTaxes...`).
+  영업외손익이 섞인 다른 지표다. 6종목은 `DATA_INSUFFICIENT`로 제외되는
+  것이 맞는 동작이다(§7.3). 대체값을 둘지는 사용자가 정할 일이다
+- 이자비용 자리의 `InterestPaidNet`. 현금 지급액이라 발생액과 다르다
+
+실데이터가 찾은 추출 결함:
+- **결산일 납치.** PG(6월 결산)의 10-K 주석에 2023-10-01 ~ 2024-09-30
+  구조조정 비용이 있다. 12개월이라 연간으로 보였고, "한 해에 결산일이
+  둘이면 늦은 쪽" 규칙이 그 한 항목에 2024년 결산일을 넘겨 그해 값이 전부
+  빠졌다. 이제 그날짜로 끝나는 연간 태그가 가장 많은 날이 결산일이다
+
+**분석 결과 (스냅샷 #10).** 통과 11 · 제외 29. 측정 불가 축 0.
+점수 63.7~98. ★★ 1종목(ADBE: 80점, 5년 평균 대비 -40.5%).
+제외의 최대 원인은 매핑이 아니라 **부채비율 200% 하드필터**다 -
+`HIGH_DEBT` 하나만으로 15종목(AAPL·KO·PEP·HD·UNH 등). 자사주 매입으로
+자본이 작은 미국 대형주의 구조다. 시장별 기준을 둘지는 사용자가 정할 일이다
+(§8.1의 기준은 한국에서 정했다)
 
 ### 18.5 시장별 스냅샷
 
