@@ -151,3 +151,52 @@ def test_the_summary_groups_by_grade_and_reports_the_caveats(repo):
     assert "★ 하락 중" in text
     assert "생존자 편향" in text
     assert "거래비용" in text
+
+
+
+# --- 영탁센스 (신고가 돌파) -----------------------------------------------------
+
+from stockscout.pipeline.backtest import backtest_breakouts  # noqa: E402
+
+
+def breakout_then_run(at=400, volume=3000):
+    """평탄(100) -> at일에 큰 거래량으로 110 돌파 -> 그 뒤 계속 올라 150."""
+    out = []
+    for i, d in enumerate(DAYS):
+        c = 100.0 if i < at else 110.0 if i < at + 10 else 150.0
+        v = volume if i == at else 1000
+        out.append((d, c, v))
+    return out
+
+
+def seed_v(repo, ticker, rows):
+    repo.upsert_security(Security(ticker=ticker, market="KR", name=ticker,
+                                  exchange="KOSPI", currency="KRW"))
+    repo.save_price_bars([PriceBar(ticker=ticker, date=d, close=c, volume=v)
+                          for d, c, v in rows], source="pykrx")
+
+
+def test_a_volume_breakout_is_one_event_with_its_forward_returns(repo):
+    seed_v(repo, "A.KS", breakout_then_run())
+
+    events = backtest_breakouts(repo, market="KR", config=cfg(), step_days=1).events
+
+    assert [(e.grade, e.date) for e in events] == [("BREAKOUT", DAYS[400])]
+    assert events[0].returns[20] == pytest.approx(150 / 110 - 1)
+
+
+def test_a_thin_volume_breakout_is_counted_separately(repo):
+    """거래량 조건이 정말 도움이 되는지 보려고 거래량 없는 돌파도 따로 센다."""
+    seed_v(repo, "A.KS", breakout_then_run(volume=1100))
+
+    events = backtest_breakouts(repo, market="KR", config=cfg(), step_days=1).events
+
+    assert [e.grade for e in events] == ["BREAKOUT_THIN"]
+
+
+def test_the_breakout_report_names_its_groups(repo):
+    seed_v(repo, "A.KS", breakout_then_run())
+
+    text = backtest_breakouts(repo, market="KR", config=cfg(), step_days=1).render()
+
+    assert "돌파(거래량 동반)" in text and "생존자 편향" in text

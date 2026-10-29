@@ -260,3 +260,42 @@ def test_detail_hides_noise_filings(db):
     body = TestClient(create_app(db_path=db)).get("/api/securities/005930.KS").json()
 
     assert [f["category"] for f in body["filings"]] == ["CATALYST"]
+
+
+
+def test_rows_carry_breakouts_and_the_snapshot_its_settings(tmp_path):
+    from stockscout.models import BreakoutStat
+
+    path = tmp_path / "b.db"
+    stats = PriceStats(price_current=130.0, avg_price={5: 100.0}, high_5y=130.0,
+                       drop_vs_avg={5: 0.3}, drop_vs_high=0.0)
+    with connect(path) as conn:
+        init_db(conn)
+        repo = Repository(conn)
+        repo.upsert_security(Security(ticker="005930.KS", market="KR",
+                                      name="삼성전자", currency="KRW"))
+        repo.save_snapshot(
+            Snapshot(run_at="x", config_hash="h", config_json="{}"),
+            [AnalysisResult(
+                ticker="005930.KS", filters=FilterOutcome(failures=[]), stats=stats,
+                valuation=Valuation(),
+                breakout={252: BreakoutStat(high=130.0, distance_to_high=0.0,
+                                            breakout_days_ago=0, breakout_level=100.0,
+                                            breakout_volume_ratio=3.0, holding=True)},
+                breakout_signal="BREAKOUT")])
+
+    client = TestClient(create_app(db_path=path))
+    (row,) = client.get("/api/securities").json()
+    snap = client.get("/api/snapshot").json()
+
+    assert row["breakout"]["252"]["breakout_volume_ratio"] == 3.0
+    assert row["breakout_signal"] == "BREAKOUT"
+    assert snap["breakout"]["lookback"] == 252
+    assert snap["breakout"]["volume_multiple"] == 2.0
+    assert "RISK_DISCLOSURE" in snap["breakout"]["blocking_failures"]
+
+
+def test_prices_carry_volume_for_the_volume_chart(client):
+    body = client.get("/api/securities/AAPL/prices").json()
+
+    assert "volume" in body["series"][0]

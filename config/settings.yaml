@@ -53,6 +53,14 @@ signal:
   drop_vs_avg_threshold: -0.40
   drop_vs_high_threshold: -0.40
 
+# 영탁센스: 거래량이 터지며 신고가를 돌파하고 이어가는 종목 (analysis/breakout.py)
+breakout:
+  lookback: 252              # 1년(52주) 신고가. 126 = 6개월, 1260 = 5년
+  volume_multiple: 2.0       # 돌파일 거래량 / 직전 20일 평균
+  recent_days: 10            # 최근 이 거래일 안의 돌파
+  near_pct: 0.05             # 임박: 최고가의 5% 이내
+  near_volume_multiple: 1.2  # 임박: 최근 5일 거래량 / 그 전 20일 평균
+
 sources:
   kr_fundamental: dart
   kr_price: pykrx

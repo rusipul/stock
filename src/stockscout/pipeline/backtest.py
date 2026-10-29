@@ -21,6 +21,13 @@ from statistics import mean, median
 
 from pydantic import BaseModel
 
+from stockscout.analysis.breakout import (
+    SCAN_DAYS,
+    SIGNAL_BREAKOUT,
+    SIGNAL_NEAR,
+    breakout_signal,
+    compute_breakouts,
+)
 from stockscout.analysis.filters import apply_financial_filters
 from stockscout.analysis.grading import GRADE_NONE, grade_signal, weak_axes
 from stockscout.analysis.scoring import score_security
@@ -38,10 +45,16 @@ ROUND_TRIP_COST = 0.003         # 왕복 거래비용 가정 (수수료 + 세금
 GROUP_STRONG = "STRONG"
 GROUP_WATCH = "WATCH"
 GROUP_NOT_QUALITY = "NOT_QUALITY"   # 급락했지만 우량주가 아니다
+GROUP_BREAKOUT = "BREAKOUT"            # 영탁센스: 거래량을 동반한 신고가 돌파
+GROUP_BREAKOUT_THIN = "BREAKOUT_THIN"  # 신고가는 넘었지만 거래량이 모자랐다
+GROUP_NEAR = "NEAR"
 GROUP_LABELS = {
     GROUP_STRONG: "★★ 하락 멈춤",
     GROUP_WATCH: "★ 하락 중",
     GROUP_NOT_QUALITY: "급락·비우량",
+    GROUP_BREAKOUT: "돌파(거래량 동반)",
+    GROUP_BREAKOUT_THIN: "돌파(거래량 미달)",
+    GROUP_NEAR: "신고가 임박",
 }
 
 
@@ -86,7 +99,7 @@ class BacktestReport(BaseModel):
 
     def groups(self) -> dict[str, GroupStats]:
         out = {}
-        for key in (GROUP_STRONG, GROUP_WATCH, GROUP_NOT_QUALITY):
+        for key in GROUP_LABELS:
             rows = [e for e in self.events if e.grade == key]
             if rows:
                 out[key] = _stats(rows)
@@ -275,3 +288,90 @@ def _outcome(s: _Series, idx: _Series, calendar: list[date], i: int) -> Event | 
     low = min((b.close for b in window), default=entry)
     return Event(ticker="", date=t, grade="", drop=0.0, returns=returns,
                  excess=excess, max_adverse=min(low / entry - 1, 0.0))
+
+
+
+def backtest_breakouts(
+    repo: Repository,
+    market: str,
+    config: Config,
+    step_days: int = 5,
+    cost: float = ROUND_TRIP_COST,
+) -> BacktestReport:
+    """영탁센스 검증: 과거 시점마다 신고가 돌파·임박을 판정하고 이후 성과를 잰다.
+
+    거래량 조건의 값을 보려고 신고가는 넘었지만 거래량이 모자란 돌파도 따로
+    센다. 한 번의 신호(조건에 들어가서 벗어날 때까지) 안에서 그룹마다 첫
+    등장만 센다. 위험 공시·자금 여력은 과거 시점 데이터가 없어 보지 않는다.
+    """
+    bc = config.breakout
+    securities = repo.list_securities(market=market)
+    report = BacktestReport(market=market, securities=len(securities), cost=cost)
+    series = {s.ticker: _Series(repo.get_price_bars(s.ticker)) for s in securities}
+    series = {t: s for t, s in series.items() if s.bars}
+    if not series:
+        return report
+    first = min(s.dates[0] for s in series.values())
+    last = max(s.dates[-1] for s in series.values())
+    calendar = repo.trading_dates(first, last, market=market)
+    eligible = [i for i, d in enumerate(calendar)
+                if (d - first).days >= WARMUP_MONTHS_DAYS
+                and i + max(HORIZONS) < len(calendar)]
+    if not eligible:
+        return report
+    eval_idx = eligible[::step_days]
+    report.start, report.end = calendar[eval_idx[0]], calendar[eval_idx[-1]]
+
+    index_series: dict[str, _Series] = {}
+    baseline: list[Event] = []
+    window = bc.lookback + SCAN_DAYS + 25   # 판정에 필요한 만큼만 잘라 계산한다
+    for security in securities:
+        s = series.get(security.ticker)
+        if s is None:
+            continue
+        bench = benchmark_for(security)
+        if bench not in index_series:
+            index_series[bench] = _Series(repo.get_price_bars(bench))
+        idx = index_series[bench]
+        seen: set[str] = set()
+        for i in eval_idx:
+            t = calendar[i]
+            k = s.upto(t)
+            if k == 0 or s.dates[k - 1] < calendar[max(i - 5, 0)]:
+                continue
+            outcome = _outcome(s, idx, calendar, i)
+            if outcome is None:
+                continue
+            baseline.append(outcome.model_copy(update={"ticker": security.ticker,
+                                                       "grade": "BASELINE"}))
+            stat = compute_breakouts(s.bars[max(0, k - window):k], as_of=t,
+                                     lookbacks=[bc.lookback]).get(bc.lookback)
+            group = None
+            if stat is not None:
+                sig = breakout_signal(stat, bc)
+                if sig == SIGNAL_BREAKOUT:
+                    group = GROUP_BREAKOUT
+                elif (stat.breakout_days_ago is not None
+                      and stat.breakout_days_ago <= bc.recent_days and stat.holding):
+                    group = GROUP_BREAKOUT_THIN
+                elif sig == SIGNAL_NEAR:
+                    group = GROUP_NEAR
+            # 한 번의 신호 구간: 최근 20거래일 안에 돌파가 있거나 고점 근처인 동안.
+            # 그 안에서는 첫 신호만 센다 - 다만 임박·거래량 미달로 시작했다가 거래량
+            # 동반 돌파가 나오면 그것은 따로 센다(영탁센스의 핵심 신호다).
+            in_episode = stat is not None and (
+                stat.breakout_days_ago is not None
+                or stat.distance_to_high >= -bc.near_pct)
+            if not in_episode:
+                seen.clear()
+                continue
+            if group is None or group in seen:
+                continue
+            if seen and group != GROUP_BREAKOUT:
+                continue
+            seen.add(group)
+            report.events.append(outcome.model_copy(update={
+                "ticker": security.ticker, "grade": group,
+                "drop": stat.distance_to_high}))
+    report.baseline = _stats(baseline) if baseline else None
+    return report

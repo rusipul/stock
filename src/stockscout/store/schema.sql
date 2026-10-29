@@ -105,7 +105,8 @@ CREATE TABLE IF NOT EXISTS analysis_results (
   drawdown_stats  TEXT,
   weak_axes       TEXT,
   fcf_yield       REAL,
-  interim         TEXT,   -- 최근 중간보고서 누적 vs 전년 동기 (InterimResults JSON)   -- 영역 최소점 미달 축 JSON 목록   -- {"benchmark": "^KS11", "windows": {"3": DrawdownStat}}   -- {"1": {avg_price, drop_vs_avg, high, drop_vs_high}, ...}
+  interim         TEXT,
+  breakout_stats  TEXT,   -- 영탁센스 {"signal": ..., "lookbacks": {"252": BreakoutStat}}   -- 최근 중간보고서 누적 vs 전년 동기 (InterimResults JSON)   -- 영역 최소점 미달 축 JSON 목록   -- {"benchmark": "^KS11", "windows": {"3": DrawdownStat}}   -- {"1": {avg_price, drop_vs_avg, high, drop_vs_high}, ...}
                           -- 1~5년 전부. 화면의 비교 기간 슬라이더가 쓴다
   market_cap      REAL,
   per             REAL,

@@ -12,6 +12,7 @@
   <header id="topbar">
     <span class="brand">stockscout</span>
     <nav id="market-tabs"></nav>
+    <nav id="mode-tabs"></nav>
     <span id="snapshot-info" class="muted">불러오는 중…</span>
   </header>
 
@@ -20,6 +21,7 @@
       <div id="controls">
         <input id="search" type="search" placeholder="종목명 또는 코드 검색" autocomplete="off">
 
+        <div id="dip-controls">
         <div class="slider-row">
           <label for="drop-threshold">고점 대비 하락</label>
           <output id="drop-value">-25%</output>
@@ -39,6 +41,30 @@
           </div>
           <input id="score-threshold" type="range" min="0" max="100" step="5" value="70" disabled>
           <p class="hint" id="score-hint"></p>
+        </div>
+        </div>
+
+        <!-- 영탁센스: 거래량이 터지며 신고가를 돌파하고 이어가는 종목 -->
+        <div id="sense-controls" hidden>
+          <div class="slider-row">
+            <label for="sense-lookback">신고가 기간</label>
+            <output id="sense-lookback-value">1년</output>
+          </div>
+          <input id="sense-lookback" type="range" min="0" max="2" step="1" value="1">
+
+          <div class="slider-row">
+            <label for="sense-mult">돌파일 거래량 (20일 평균 대비)</label>
+            <output id="sense-mult-value">2.0배</output>
+          </div>
+          <input id="sense-mult" type="range" min="1" max="5" step="0.5" value="2">
+
+          <div class="slider-row">
+            <label for="sense-days">돌파 후 경과 (최대)</label>
+            <output id="sense-days-value">10거래일</output>
+          </div>
+          <input id="sense-days" type="range" min="1" max="20" step="1" value="10">
+          <p class="hint">돌파 = 직전 고점을 넘은 날 거래량이 터졌고, 지금도 돌파선(-3%) 위.
+            임박 = 고점의 5% 이내, 최근 5일 거래량 증가. 위험 종목(위험 공시·자금 여력·거래대금·자본잠식)은 뺀다.</p>
         </div>
 
         <p id="hit-count" class="hit"></p>

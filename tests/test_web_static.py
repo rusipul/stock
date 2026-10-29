@@ -609,3 +609,72 @@ def test_the_detail_is_laid_out_as_the_ui_slide():
 
 def test_the_financials_table_shows_the_last_five_years():
     assert "slice(-FIN_YEARS_SHOWN)" in _function_body(js_text(), "financialsTable")
+
+
+
+# --- 영탁센스 ------------------------------------------------------------------
+
+
+def _sense_cases(rows, sense=None):
+    import json as _json
+
+    js = js_text()
+    sense = sense or {"lookback": 252, "mult": 2.0, "days": 10}
+    script = (
+        "const state = { mode: 'sense', sense: " + _json.dumps(sense) + ","
+        " snapshot: { breakout: { near_pct: 0.05, near_volume_multiple: 1.2,"
+        " blocking_failures: ['RISK_DISCLOSURE', 'LIQUIDITY_SHORTFALL'] } } };\n"
+        f"{_function_body(js, 'breakoutOf')}\n{_function_body(js, 'senseOf')}\n"
+        f"console.log(JSON.stringify({_json.dumps(rows)}.map(senseOf)));"
+    )
+    return _json.loads(_run_node(script))
+
+
+def _brow(days=2, ratio=3.0, holding=True, dist=0.0, recent=1.0, failures=None):
+    return {"filter_failures": failures or [], "breakout": {"252": {
+        "breakout_days_ago": days, "breakout_volume_ratio": ratio, "holding": holding,
+        "distance_to_high": dist, "recent_volume_ratio": recent}}}
+
+
+def test_sense_of_matches_the_server_rule():
+    """analysis/breakout.py의 breakout_signal과 같은 규칙이다."""
+    assert _sense_cases([
+        _brow(),                                   # 돌파
+        _brow(ratio=1.5),                          # 거래량 부족
+        _brow(holding=False),                      # 돌파선 아래로 밀렸다
+        _brow(days=15),                            # 오래된 돌파
+        _brow(days=None, ratio=None, dist=-0.03, recent=1.5),   # 임박
+        _brow(days=None, ratio=None, dist=-0.03, recent=1.0),   # 거래량 없는 근접
+        _brow(failures=["RISK_DISCLOSURE"]),       # 위험 종목은 빼고 본다
+        _brow(failures=["HIGH_DEBT"]),             # 재무 약점은 빼지 않는다
+    ]) == ["BREAKOUT", None, None, None, "NEAR", None, None, "BREAKOUT"]
+
+
+def test_sense_sliders_change_the_judgement_without_a_round_trip():
+    assert _sense_cases([_brow(ratio=1.6)], {"lookback": 252, "mult": 1.5, "days": 10}) \
+        == ["BREAKOUT"]
+    body = _function_body(js_text(), "wireControls")
+    handler = body.split('$("sense-mult").oninput')[1].split("};")[0]
+    assert "fetch" not in handler and "getJSON" not in handler
+
+
+def test_the_mode_tabs_and_sense_controls_exist():
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+    for el in ('id="mode-tabs"', 'id="sense-controls"', 'id="dip-controls"',
+               'id="sense-lookback"', 'id="sense-mult"', 'id="sense-days"'):
+        assert el in html
+    assert "영탁센스" in js_text()
+
+
+def test_the_chosen_mode_survives_a_reload():
+    js = js_text()
+
+    assert "stockscout.mode" in _function_body(js, "loadPrefs")
+    assert "stockscout.mode" in _function_body(js, "savePrefs")
+
+
+def test_the_chart_draws_volume_bars():
+    body = _function_body(js_text(), "drawChart")
+
+    assert "volume" in body and '"bar"' in body

@@ -17,6 +17,7 @@ from stockscout.analysis.filters import (
     apply_price_filters,
     apply_trading_value_filter,
 )
+from stockscout.analysis.breakout import breakout_signal, compute_breakouts
 from stockscout.analysis.grading import grade_signal, weak_axes
 from stockscout.analysis.scoring import score_security
 from stockscout.analysis.valuation import (
@@ -170,6 +171,11 @@ def analyze_market(
             # 매겨두면 화면에 "제외됐지만 85점"이라는 모순된 표시가 난다.
             card = score_security(financials, config.scoring) if outcome.passed else None
             interim = _latest_interim(repo, security, financials)
+            # 영탁센스. 원재료는 기간별로 다 남기고, 판정은 기본 설정으로 한 번.
+            breakouts = compute_breakouts(bars, as_of=as_of,
+                                          lookbacks=config.breakout.lookback_choices)
+            main = breakouts.get(config.breakout.lookback)
+            sense = breakout_signal(main, config.breakout) if main else None
             grade, reason = grade_signal(
                 stats,
                 score_total=card.total if card else None,
@@ -205,6 +211,8 @@ def analyze_market(
             benchmark=benchmark,
             weak_axes=weak_axes(card, signal.min_axis_ratio) if card else [],
             interim=interim,
+            breakout=breakouts,
+            breakout_signal=sense,
         ))
         summary.analyzed += 1
         if outcome.passed:

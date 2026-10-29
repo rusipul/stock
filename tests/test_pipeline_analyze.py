@@ -834,3 +834,25 @@ def test_an_interim_older_than_the_latest_annual_is_not_used(repo):
 
     (row,) = repo.get_analysis_results(summary.snapshot_id)
     assert row["interim"] is None
+
+
+
+# --- 영탁센스 -----------------------------------------------------------------
+
+
+def test_analyze_records_breakouts_for_every_lookback(repo):
+    """평탄하다가 마지막 날 3배 거래량으로 신고가 - 1년 기준 돌파."""
+    seed(repo, "005930.KS", last=date(2026, 9, 9))
+    repo.save_price_bars([PriceBar(ticker="005930.KS", date=date(2026, 9, 10),
+                                   close=130.0, volume=3000)], source="pykrx")
+    repo.save_price_bars([
+        PriceBar(ticker="005930.KS", date=date(2026, 9, 10) - timedelta(days=i),
+                 close=100.0, volume=1000) for i in range(1, 400)], source="pykrx")
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+    b = json.loads(row["breakout_stats"])
+    assert set(b["lookbacks"]) >= {"126", "252"}
+    assert b["lookbacks"]["252"]["breakout_volume_ratio"] == pytest.approx(3.0)
+    assert b["signal"] == "BREAKOUT"

@@ -2,6 +2,8 @@
 
 const state = {
   market: "KR",
+  mode: "dip",           // "dip" = 낙폭 우량주, "sense" = 영탁센스
+  sense: { lookback: null, mult: null, days: null },   // null = 스냅샷 기본값
   rows: [],
   snapshot: null,
   selected: null,
@@ -51,6 +53,10 @@ function loadPrefs() {
     if (saved !== null) state.dropThreshold = parseFloat(saved);
     const months = parseInt(localStorage.getItem("stockscout.ddMonths"), 10);
     if (months > 0) state.months = months;
+    const mode = localStorage.getItem("stockscout.mode");
+    if (mode === "dip" || mode === "sense") state.mode = mode;
+    const sense = JSON.parse(localStorage.getItem("stockscout.sense") || "null");
+    if (sense && typeof sense === "object") state.sense = { ...state.sense, ...sense };
     const minScore = localStorage.getItem("stockscout.minScore");
     if (minScore !== null) state.minScore = parseFloat(minScore);
     const market = localStorage.getItem("stockscout.market");
@@ -62,6 +68,8 @@ function savePrefs() {
   try {
     localStorage.setItem("stockscout.ddThreshold", String(state.dropThreshold));
     localStorage.setItem("stockscout.ddMonths", String(state.months));
+    localStorage.setItem("stockscout.mode", state.mode);
+    localStorage.setItem("stockscout.sense", JSON.stringify(state.sense));
     localStorage.setItem("stockscout.minScore", String(state.minScore));
     localStorage.setItem("stockscout.market", state.market);
   } catch (e) { /* 저장 실패는 기능을 막지 않는다 */ }
@@ -77,7 +85,21 @@ function filterAndSort(rows, q, sort) {
                       || r.ticker.toLowerCase().includes(needle))
     : rows.slice();
   const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
-  if (sort === "drop") {
+  if (sort === "drop" && state.mode === "sense") {
+    // 신호순: 돌파(최근 돌파부터) -> 임박(고점에 가까운 순) -> 나머지(고점에 가까운 순)
+    const rank = (r) => {
+      const s = senseOf(r), b = breakoutOf(r);
+      const dist = b ? b.distance_to_high : -9;
+      if (s === "BREAKOUT") return [0, b.breakout_days_ago, -dist];
+      if (s === "NEAR") return [1, -dist, 0];
+      return [2, -dist, 0];
+    };
+    out.sort((a, b) => {
+      const ra = rank(a), rb = rank(b);
+      for (let i = 0; i < 3; i++) if (ra[i] !== rb[i]) return ra[i] - rb[i];
+      return 0;
+    });
+  } else if (sort === "drop") {
     const drop = (r) => { const dd = drawdownOf(r); return dd ? dd.drop_from_high : null; };
     out.sort((a, b) => {
       const na = drop(a) === null, nb = drop(b) === null;
@@ -128,6 +150,41 @@ function drawdownOf(row) {
   return (row.drawdown && row.drawdown[state.months]) || null;
 }
 
+// --- 영탁센스 ---------------------------------------------------------------
+
+// 선택한 신고가 기간(거래일)의 돌파 원재료 (analysis/breakout.compute_breakouts).
+function breakoutOf(row) {
+  return (row.breakout && row.breakout[state.sense.lookback]) || null;
+}
+
+// 돌파·임박·없음. 서버의 analysis/breakout.breakout_signal과 같은 규칙이다.
+// 위험 종목(위험 공시·자금 여력·거래대금·자본잠식)은 빼고, 재무 약점은 빼지 않는다 -
+// 추세 종목은 재무가 아직 약한 경우가 많다.
+function senseOf(row) {
+  const cfg = state.snapshot.breakout || {};
+  const blocking = cfg.blocking_failures || [];
+  if ((row.filter_failures || []).some((f) => blocking.includes(f))) return null;
+  const b = breakoutOf(row);
+  if (!b) return null;
+  if (b.breakout_days_ago !== null && b.breakout_days_ago !== undefined
+      && b.breakout_days_ago <= state.sense.days
+      && b.breakout_volume_ratio !== null && b.breakout_volume_ratio !== undefined
+      && b.breakout_volume_ratio >= state.sense.mult
+      && b.holding) return "BREAKOUT";
+  if (b.distance_to_high >= -(cfg.near_pct ?? 0.05)
+      && b.recent_volume_ratio !== null && b.recent_volume_ratio !== undefined
+      && b.recent_volume_ratio >= (cfg.near_volume_multiple ?? 1.2)) return "NEAR";
+  return null;
+}
+
+const SENSE_BADGES = { BREAKOUT: "돌파", NEAR: "임박" };
+const LOOKBACK_LABELS = { 126: "6개월", 252: "1년", 1260: "5년" };
+
+function lookbackChoices() {
+  return (state.snapshot && state.snapshot.breakout && state.snapshot.breakout.lookback_choices)
+    || [126, 252, 1260];
+}
+
 function hits(row) {
   const dd = drawdownOf(row);
   return dd !== null && dd.drop_from_high <= state.dropThreshold;
@@ -159,12 +216,48 @@ function visibleRows() {
   else if (state.chip === "hit") rows = rows.filter((r) => r.passed_filters && hits(r));
   else if (state.chip === "strong") rows = rows.filter((r) => gradeOf(r) === "STRONG");
   else if (state.chip === "single") rows = rows.filter((r) => gradeOf(r) === "WATCH");
+  else if (state.chip === "breakout") rows = rows.filter((r) => senseOf(r) === "BREAKOUT");
+  else if (state.chip === "near") rows = rows.filter((r) => senseOf(r) === "NEAR");
   return rows;
 }
 
 // --- 렌더 ------------------------------------------------------------
 
 const MARKETS = [["KR", "한국"], ["US", "미국"]];
+const MODES = [["dip", "낙폭 우량주"], ["sense", "영탁센스"]];
+
+function renderModeTabs() {
+  const nav = $("mode-tabs");
+  nav.innerHTML = "";
+  for (const [key, label] of MODES) {
+    const b = document.createElement("button");
+    b.className = "tab" + (state.mode === key ? " on" : "");
+    b.textContent = label;
+    b.onclick = () => {
+      if (state.mode === key) return;
+      state.mode = key;
+      savePrefs();
+      applyMode();
+    };
+    nav.appendChild(b);
+  }
+}
+
+// 모드에 맞는 슬라이더·칩·목록·상세로 바꾼다. 데이터는 다시 받지 않는다.
+function applyMode() {
+  renderModeTabs();
+  $("dip-controls").hidden = state.mode === "sense";
+  $("sense-controls").hidden = state.mode !== "sense";
+  $("sort").options[0].textContent = state.mode === "sense" ? "신호순" : "하락률순";
+  if (!state.snapshot) return;
+  state.rows = filterAndSort(state.rows, $("search").value.trim(), $("sort").value);
+  renderChips();
+  renderHitCount();
+  renderList();
+  if (state.detail && state.selected === state.detail.d.ticker) {
+    renderDetail(state.detail.d, state.detail.prices);
+  }
+}
 
 function renderMarketTabs() {
   const nav = $("market-tabs");
@@ -211,13 +304,16 @@ function renderChips() {
   const gradeDefs = state.snapshot.has_scores
     ? [["strong", "★★"], ["single", "★"]]
     : [["hit", "임계치 이하"]];
-  const defs = [
-    ["all", "전체"],
-    ...gradeDefs,
-    ["passed", "통과"],
-    ["excluded", "제외"],
-    ["watch", "관심"],
-  ];
+  const defs = state.mode === "sense"
+    ? [["all", "전체"], ["breakout", "돌파"], ["near", "임박"], ["watch", "관심"]]
+    : [
+      ["all", "전체"],
+      ...gradeDefs,
+      ["passed", "통과"],
+      ["excluded", "제외"],
+      ["watch", "관심"],
+    ];
+  if (!defs.some(([key]) => key === state.chip)) state.chip = "all";
   $("chips").innerHTML = "";
   for (const [key, label] of defs) {
     const b = document.createElement("button");
@@ -229,6 +325,14 @@ function renderChips() {
 }
 
 function renderHitCount() {
+  if (state.mode === "sense") {
+    const n = (s) => state.rows.filter((r) => senseOf(r) === s).length;
+    $("hit-count").textContent =
+      `${LOOKBACK_LABELS[state.sense.lookback] ?? state.sense.lookback + "일"} 신고가 · `
+      + `거래량 ${state.sense.mult.toFixed(1)}배 -> 돌파 ${n("BREAKOUT")} · 임박 ${n("NEAR")}`
+      + ` / 전체 ${state.rows.length}종목`;
+    return;
+  }
   const passing = state.rows.filter((r) => r.passed_filters);
   if (state.snapshot.has_scores) {
     const strong = passing.filter((r) => gradeOf(r) === "STRONG").length;
@@ -260,19 +364,37 @@ function renderList() {
     const nm = document.createElement("span");
     nm.className = "nm";
     nm.textContent = row.name;
-    const grade = gradeOf(row);
-    if (grade) {
-      const badge = document.createElement("span");
-      badge.className = "grade " + grade.toLowerCase();
-      badge.textContent = GRADE_BADGES[grade];
-      nm.append(" ", badge);
-    }
-
     const dp = document.createElement("span");
-    const dd = drawdownOf(row);
-    const drop = dd ? dd.drop_from_high : null;
-    dp.className = "dp " + signClass(drop);
-    dp.textContent = pct(drop);
+    if (state.mode === "sense") {
+      const s = senseOf(row), b = breakoutOf(row);
+      if (s) {
+        const badge = document.createElement("span");
+        badge.className = "sense " + s.toLowerCase();
+        badge.textContent = SENSE_BADGES[s];
+        nm.append(" ", badge);
+      }
+      // 돌파면 그날 거래량 배수, 아니면 고점까지 거리
+      if (s === "BREAKOUT") {
+        dp.className = "dp pos";
+        dp.textContent = `거래량 ${b.breakout_volume_ratio.toFixed(1)}배`;
+      } else {
+        const dist = b ? b.distance_to_high : null;
+        dp.className = "dp " + signClass(dist);
+        dp.textContent = dist === null ? "—" : `고점 ${pct(dist)}`;
+      }
+    } else {
+      const grade = gradeOf(row);
+      if (grade) {
+        const badge = document.createElement("span");
+        badge.className = "grade " + grade.toLowerCase();
+        badge.textContent = GRADE_BADGES[grade];
+        nm.append(" ", badge);
+      }
+      const dd = drawdownOf(row);
+      const drop = dd ? dd.drop_from_high : null;
+      dp.className = "dp " + signClass(drop);
+      dp.textContent = pct(drop);
+    }
 
     li.append(star, nm, dp);
     ul.appendChild(li);
@@ -375,7 +497,23 @@ function renderDetail(d, prices) {
 
   const kpis = document.createElement("div");
   kpis.className = "kpis";
-  kpis.innerHTML = [
+  const bo = breakoutOf(d);
+  const sense = senseOf(d);
+  const lbLabel = LOOKBACK_LABELS[state.sense.lookback] ?? `${state.sense.lookback}일`;
+  kpis.innerHTML = state.mode === "sense" ? [
+    kpi(money(d.price_current), "현재가"),
+    kpi(bo ? pct(bo.distance_to_high) : "—", `${lbLabel} 고점 대비`,
+        bo ? signClass(bo.distance_to_high) : "", !bo),
+    bo && bo.breakout_volume_ratio !== null && bo.breakout_volume_ratio !== undefined
+      ? kpi(`${bo.breakout_volume_ratio.toFixed(1)}배`, "돌파일 거래량 (20일 평균 대비)",
+            bo.breakout_volume_ratio >= state.sense.mult ? "pos" : "")
+      : kpi("—", "돌파일 거래량", "", true),
+    bo && bo.breakout_days_ago !== null && bo.breakout_days_ago !== undefined
+      ? kpi(`${bo.breakout_days_ago}거래일 전`, `돌파 ${bo.breakout_date ?? ""}`)
+      : kpi("—", "최근 20거래일 돌파 없음", "", true),
+    kpi(sense ? SENSE_BADGES[sense] : "신호 없음", "영탁센스",
+        sense === "BREAKOUT" ? "pos" : sense === "NEAR" ? "" : "", !sense),
+  ].join("") : [
     kpi(money(d.price_current), "현재가"),
     kpi(pct(dd && dd.drop_from_high), `최근 ${state.months}개월 고점 대비`,
         signClass(dd && dd.drop_from_high)),
@@ -425,7 +563,9 @@ function renderDetail(d, prices) {
   // --- 판정근거 -----------------------------------------------------------
   const rat = document.createElement("div");
   rat.className = "rationale";
-  rat.innerHTML = d.rationale.map((line) => `<div>${escapeHtml(line)}</div>`).join("");
+  const senseLines = state.mode === "sense" ? senseRationale(d, bo, sense, lbLabel) : [];
+  rat.innerHTML = [...senseLines, ...d.rationale]
+    .map((line) => `<div>${escapeHtml(line)}</div>`).join("");
   $("cell-reason").appendChild(rat);
 
   // --- 재무추이: 최근 실적 변화 + 연도별 표 ---------------------------------
@@ -483,6 +623,32 @@ const BENCHMARK_LABELS = { "^KS11": "코스피", "^KQ11": "코스닥", "^GSPC": 
 function kpi(value, label, cls = "", empty = false) {
   return `<div class="kpi${empty ? " empty" : ""}">
     <b class="${cls}">${value}</b><span>${label}</span></div>`;
+}
+
+// 영탁센스 판정 근거. 화면 슬라이더 값으로 다시 쓴다.
+function senseRationale(d, bo, sense, lbLabel) {
+  const cfg = state.snapshot.breakout || {};
+  const blocked = (d.filter_failures || []).filter((f) => (cfg.blocking_failures || []).includes(f));
+  const lines = [`[영탁센스] ${sense ? SENSE_BADGES[sense] : "신호 없음"}`
+    + ` (${lbLabel} 신고가 · 거래량 ${state.sense.mult.toFixed(1)}배 · ${state.sense.days}거래일 이내)`];
+  if (blocked.length) lines.push(`위험 종목이라 보지 않습니다: ${blocked.join(", ")}`);
+  if (!bo) {
+    lines.push(`${lbLabel} 신고가를 말할 만큼 주가 이력이 없습니다`);
+    return lines;
+  }
+  if (bo.breakout_days_ago !== null && bo.breakout_days_ago !== undefined) {
+    lines.push(`돌파: ${bo.breakout_date} (${bo.breakout_days_ago}거래일 전) 직전 고점 `
+      + `${money(bo.breakout_level)} 돌파 · 그날 거래량 20일 평균의 `
+      + `${bo.breakout_volume_ratio === null ? "—" : bo.breakout_volume_ratio.toFixed(1) + "배"}`);
+    lines.push(bo.holding ? `지금도 돌파선 위를 유지 (현재 ${money(d.price_current)})`
+                          : `돌파선 아래로 3% 넘게 밀렸습니다 (현재 ${money(d.price_current)})`);
+  } else {
+    lines.push("최근 20거래일 안에 신고가 돌파가 없습니다");
+  }
+  lines.push(`${lbLabel} 고점 ${money(bo.high)} 대비 ${pct(bo.distance_to_high)}`
+    + ` · 최근 5일 거래량 ${bo.recent_volume_ratio === null ? "—" : bo.recent_volume_ratio.toFixed(1) + "배"}`);
+  lines.push("— 아래는 낙폭 우량주 기준의 판정 근거 —");
+  return lines;
 }
 
 function sectionTitle(text) {
@@ -602,7 +768,12 @@ function drawChart(p) {
   // 기준선은 서버가 준 값을 그대로 쓴다. 여기서 다시 평균을 내면
   // 창 정의나 반올림이 갈려 차트와 판정 근거가 어긋난다.
   const dd = state.detail ? drawdownOf(state.detail.d) : null;
-  const refs = [
+  const bo = state.detail && state.mode === "sense" ? breakoutOf(state.detail.d) : null;
+  const lbLabel = LOOKBACK_LABELS[state.sense.lookback] ?? `${state.sense.lookback}일`;
+  const refs = state.mode === "sense" ? [
+    [`돌파선`, bo ? bo.breakout_level : null, "#d53f8c"],
+    [`${lbLabel} 고점`, bo ? bo.high : null, "#e53e3e"],
+  ] : [
     [`${state.months}개월 고점`, dd ? dd.high : null, "#d69e2e"],
     ["5년 고점", p.high_5y, "#e53e3e"],
     ["5년 평균", p.avg_price_5y, "#805ad5"],
@@ -627,6 +798,21 @@ function drawChart(p) {
       borderWidth: 1,
       borderDash: [5, 4],
       pointRadius: 0,
+      yAxisID: "y",
+    });
+  }
+  // 거래량 막대. 아래쪽 4분의 1만 쓰도록 축 최대값을 키운다 (첨부 차트처럼).
+  const volumes = p.series.map((x) => x.volume ?? null);
+  const maxVol = Math.max(0, ...volumes.filter((v) => v !== null));
+  if (maxVol > 0) {
+    datasets.push({
+      type: "bar",
+      label: "거래량",
+      data: volumes,
+      backgroundColor: "rgba(113, 128, 150, 0.35)",
+      borderWidth: 0,
+      yAxisID: "yv",
+      order: 9,
     });
   }
 
@@ -644,6 +830,8 @@ function drawChart(p) {
       scales: {
         x: { ticks: { maxTicksLimit: 8, font: { size: 10 } }, grid: { display: false } },
         y: { ticks: { font: { size: 10 }, callback: (v) => money(v) } },
+        yv: { display: false, beginAtZero: true, max: maxVol * 4 || undefined,
+              grid: { display: false } },
       },
     },
   });
@@ -666,6 +854,28 @@ function syncSliders() {
   const pctValue = Math.round(-state.dropThreshold * 100);
   $("drop-threshold").value = String(pctValue);
   $("drop-value").textContent = `-${pctValue}%`;
+
+  const lbs = lookbackChoices();
+  if (!lbs.includes(state.sense.lookback)) state.sense.lookback = lbs[Math.min(1, lbs.length - 1)];
+  $("sense-lookback").max = String(lbs.length - 1);
+  $("sense-lookback").value = String(lbs.indexOf(state.sense.lookback));
+  $("sense-lookback-value").textContent = LOOKBACK_LABELS[state.sense.lookback] ?? `${state.sense.lookback}일`;
+  $("sense-mult").value = String(state.sense.mult);
+  $("sense-mult-value").textContent = `${state.sense.mult.toFixed(1)}배`;
+  $("sense-days").value = String(state.sense.days);
+  $("sense-days-value").textContent = `${state.sense.days}거래일`;
+}
+
+// 영탁센스 슬라이더가 바뀌면 서버 왕복 없이 다시 판정·정렬하고 열린 상세를 다시 그린다.
+function onSenseChanged() {
+  savePrefs();
+  syncSliders();
+  state.rows = filterAndSort(state.rows, $("search").value.trim(), $("sort").value);
+  renderHitCount();
+  renderList();
+  if (state.detail && state.selected === state.detail.d.ticker) {
+    renderDetail(state.detail.d, state.detail.prices);
+  }
 }
 
 function wireControls() {
@@ -698,6 +908,19 @@ function wireControls() {
     if (state.detail && state.selected === state.detail.d.ticker) {
       renderDetail(state.detail.d, state.detail.prices);
     }
+  };
+
+  $("sense-lookback").oninput = () => {
+    state.sense.lookback = lookbackChoices()[Number($("sense-lookback").value)];
+    onSenseChanged();
+  };
+  $("sense-mult").oninput = () => {
+    state.sense.mult = Number($("sense-mult").value);
+    onSenseChanged();
+  };
+  $("sense-days").oninput = () => {
+    state.sense.days = Number($("sense-days").value);
+    onSenseChanged();
   };
 
   $("search").oninput = async () => { await reload(); };
@@ -751,6 +974,10 @@ async function loadMarket() {
   if (state.dropThreshold === null) {
     state.dropThreshold = state.snapshot.drawdown_threshold ?? -0.25;
   }
+  const bcfg = state.snapshot.breakout || {};
+  if (state.sense.lookback === null) state.sense.lookback = bcfg.lookback ?? 252;
+  if (state.sense.mult === null) state.sense.mult = bcfg.volume_multiple ?? 2.0;
+  if (state.sense.days === null) state.sense.days = bcfg.recent_days ?? 10;
   syncSliders();
   renderSnapshotInfo();
   renderScoreBlock();
@@ -762,6 +989,7 @@ async function init() {
   loadPrefs();
   wireControls();
   await loadMarket();
+  applyMode();
 }
 
 init();

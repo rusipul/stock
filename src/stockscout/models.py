@@ -298,6 +298,23 @@ class DrawdownStat(BaseModel):
     period_return: float | None = None  # 기간 첫 봉 대비 단순 수익률
 
 
+class BreakoutStat(BaseModel):
+    """한 기간(거래일)의 신고가 돌파 원재료 (analysis/breakout.py).
+
+    판정(돌파·임박)은 설정에 따라 breakout_signal이 한다 - 화면은 같은
+    원재료로 슬라이더 값만 바꿔 다시 판정한다.
+    """
+
+    high: float                              # 최근 기간 최고 종가 (오늘 포함)
+    distance_to_high: float                  # 현재가 / high - 1 (0 이하)
+    breakout_days_ago: int | None = None     # 최근 돌파일이 몇 거래일 전인가
+    breakout_date: date | None = None
+    breakout_level: float | None = None      # 그날 넘은 직전 최고 종가 (돌파선)
+    breakout_volume_ratio: float | None = None  # 그날 거래량 / 직전 20일 평균
+    holding: bool = False                    # 현재가가 돌파선(-3%) 위를 유지하는가
+    recent_volume_ratio: float | None = None # 최근 5일 평균 거래량 / 그 전 20일 평균
+
+
 class PriceStats(BaseModel):
     """가격 통계 (설계서 §9.1).
 
@@ -439,6 +456,8 @@ class AnalysisResult(BaseModel):
     benchmark: str | None = None   # 시장 비교 지수 기호 (benchmarks.py)
     weak_axes: list[str] = []      # 영역 최소점 미달·측정 불가 축 (grading.weak_axes)
     interim: InterimResults | None = None   # 최근 중간보고서 누적 vs 전년 동기
+    breakout: dict[int, "BreakoutStat"] = {}    # 영탁센스 원재료 (거래일 기간별)
+    breakout_signal: str | None = None          # 기본 설정의 판정 (BREAKOUT·NEAR)
 
     @property
     def passed_filters(self) -> bool:

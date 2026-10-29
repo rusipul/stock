@@ -134,6 +134,35 @@ class SignalConfig(BaseModel):
         return self
 
 
+class BreakoutConfig(BaseModel):
+    """영탁센스: 거래량이 터지며 신고가를 돌파하고 이어가는 종목.
+
+    돌파 = 최근 recent_days 거래일 안에 종가가 직전 lookback 거래일 최고 종가를
+    넘었고, 그날 거래량이 직전 20일 평균의 volume_multiple배 이상이며, 지금도
+    돌파선(-3%) 위를 유지한다. 임박 = 최고가의 near_pct 이내이고 최근 5일
+    거래량이 near_volume_multiple배 이상이다.
+    """
+
+    lookback: int = 252                      # 거래일. 252 = 1년(52주) 신고가
+    lookback_choices: list[int] = [126, 252, 1260]   # 6개월 · 1년 · 5년
+    volume_multiple: float = Field(default=2.0, gt=0)
+    recent_days: int = Field(default=10, ge=1, le=20)
+    near_pct: float = Field(default=0.05, ge=0)
+    near_volume_multiple: float = Field(default=1.2, gt=0)
+    # 이 사유로 제외된 종목은 영탁센스에도 보이지 않는다 - 추세 종목은 재무가
+    # 아직 약한 경우가 많아 우량주 점수로는 거르지 않고, 위험만 뺀다.
+    blocking_failures: list[str] = ["RISK_DISCLOSURE", "LIQUIDITY_SHORTFALL",
+                                    "LOW_TRADING_VALUE", "CAPITAL_IMPAIRED"]
+
+    @model_validator(mode="after")
+    def lookback_must_be_computed(self) -> "BreakoutConfig":
+        if self.lookback not in self.lookback_choices:
+            raise ValueError(
+                f"breakout.lookback({self.lookback})가 lookback_choices"
+                f"({self.lookback_choices})에 없습니다")
+        return self
+
+
 class SourcesConfig(BaseModel):
     kr_fundamental: str = "dart"
     kr_price: str = "pykrx"
@@ -151,6 +180,7 @@ class Config(BaseModel):
     hard_filters_by_market: dict[str, dict] = {}
     scoring: dict[str, dict[str, MetricConfig]] = {}
     signal: SignalConfig = SignalConfig()
+    breakout: BreakoutConfig = BreakoutConfig()
     sources: SourcesConfig = SourcesConfig()
 
     def hard_filters_for(self, market: str) -> HardFilterConfig:

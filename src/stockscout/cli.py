@@ -276,6 +276,8 @@ def build_parser() -> argparse.ArgumentParser:
         "backtest", help="과거 시점마다 신호를 내고 이후 성과를 잰다 (기준 검증)")
     p_bt.add_argument("--market", default="KR", choices=["KR", "US"])
     p_bt.add_argument("--step", type=int, default=5, help="평가 간격 (거래일)")
+    p_bt.add_argument("--signal", default="dip", choices=["dip", "breakout"],
+                      help="dip = 낙폭 우량주, breakout = 영탁센스(신고가 돌파)")
 
     p_exp = sub.add_parser(
         "export", help="최신 스냅샷을 정적 사이트로 내보낸다 (Vercel 등에 올린다)")
@@ -343,9 +345,10 @@ def main(argv: list[str] | None = None) -> int:
             serve(args.db, host=args.host, port=args.port)
 
         elif args.command == "backtest":
-            from stockscout.pipeline.backtest import backtest_market
+            from stockscout.pipeline.backtest import backtest_breakouts, backtest_market
 
-            print(backtest_market(repo, market=args.market, config=config,
+            run = backtest_breakouts if args.signal == "breakout" else backtest_market
+            print(run(repo, market=args.market, config=config,
                                   step_days=args.step).render())
 
         elif args.command == "export":

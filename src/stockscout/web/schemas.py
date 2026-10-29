@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from stockscout.models import DrawdownStat
+from stockscout.models import BreakoutStat, DrawdownStat
 
 
 class SnapshotInfo(BaseModel):
@@ -32,6 +32,8 @@ class SnapshotInfo(BaseModel):
     drawdown_months: int = 3
     drawdown_threshold: float = -0.25
     drawdown_choices: list[int] = [1, 3, 6, 12]
+    # 영탁센스 판정 기준 (BreakoutConfig). 화면 슬라이더의 기본값이 된다.
+    breakout: dict = {}
 
     # 시가총액·PER·PBR을 계산할 수 있었는가. financials 테이블이 채워졌는지와
     # 다른 질문이다 — 발행주식수는 재무제표 API가 아니라 stockTotqySttus.json
@@ -101,6 +103,9 @@ class SecurityRow(BaseModel):
     score_cashflow: float | None = None
     weak_axes: list[str] = []
     fcf_yield: float | None = None
+    # 영탁센스: 거래일 기간 -> 돌파 원재료, 기본 설정의 판정.
+    breakout: dict[int, BreakoutStat] = {}
+    breakout_signal: str | None = None
 
     score_total: float | None
     market_cap: float | None
@@ -142,6 +147,7 @@ class SecurityDetail(SecurityRow):
 class PricePoint(BaseModel):
     date: str
     close: float
+    volume: int | None = None   # 거래량 막대 (영탁센스)
 
 
 class PriceSeries(BaseModel):

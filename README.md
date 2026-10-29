@@ -14,6 +14,12 @@
 
 공유용 요약은 `docs/selection-criteria.md`와 `.png`에 있다.
 
+**영탁센스 탭**: 거래량이 터지며 신고가를 돌파하고 그 위를 이어가는 종목
+(추세 추종). 최근 10거래일 안에 직전 1년 최고 종가를 넘었고 그날 거래량이
+직전 20일 평균의 2배 이상이며 지금도 돌파선(-3%) 위면 "돌파", 고점의 5% 이내에서
+거래량이 늘면 "임박". 기간(6개월·1년·5년)·거래량 배수·경과일은 화면에서
+조절한다. 위험 종목(위험 공시·자금 여력·거래대금·자본잠식)은 뺀다.
+
 설계는 `docs/superpowers/specs/2026-09-10-stock-screener-design.md`에 있다.
 
 ## 설치
@@ -39,6 +45,7 @@ stockscout normalize --market KR     # 원본 -> 공통 재무 형식
 stockscout analyze   --market KR     # 스냅샷 생성
 stockscout serve                     # http://127.0.0.1:8000
 stockscout backtest  --market KR     # 기준 검증: 과거 신호의 20·60·120일 성과
+stockscout backtest  --market KR --signal breakout   # 영탁센스 검증
 ```
 
 `backtest`는 과거 시점마다 그때 보였던 주가·재무(공시일 근사)로 신호를 내고

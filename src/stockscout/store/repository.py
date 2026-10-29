@@ -288,10 +288,10 @@ class Repository:
                     price_current, avg_price_1y, avg_price_3y, avg_price_5y,
                     high_5y, drop_vs_avg_1y, drop_vs_avg_3y, drop_vs_avg_5y,
                     drop_vs_high, window_stats, drawdown_stats, weak_axes,
-                    market_cap, per, pbr, fcf_yield, interim,
+                    market_cap, per, pbr, fcf_yield, interim, breakout_stats,
                     signal_grade, signal_reason
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [self._result_row(snapshot_id, r) for r in results],
             )
@@ -321,6 +321,11 @@ class Repository:
             r.valuation.market_cap, r.valuation.per, r.valuation.pbr,
             r.valuation.fcf_yield,
             r.interim.model_dump_json() if r.interim else None,
+            json.dumps({
+                "signal": r.breakout_signal,
+                "lookbacks": {str(k): v.model_dump(mode="json")
+                              for k, v in r.breakout.items()},
+            }),
             r.signal_grade, r.signal_reason,
         )
 

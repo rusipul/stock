@@ -270,7 +270,8 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
             return PriceSeries(
                 ticker=ticker,
                 as_of=snap.as_of,
-                series=[PricePoint(date=b.date.isoformat(), close=b.close)
+                series=[PricePoint(date=b.date.isoformat(), close=b.close,
+                                   volume=b.volume)
                         for b in bars],
                 price_current=row["price_current"],
                 avg_price_1y=row["avg_price_1y"],
@@ -332,6 +333,14 @@ def _interim(row) -> InterimRow | None:
     )
 
 
+def _breakout(row) -> dict:
+    stored = json.loads(row.get("breakout_stats") or "{}")
+    return {
+        "breakout": {int(k): v for k, v in (stored.get("lookbacks") or {}).items()},
+        "breakout_signal": stored.get("signal"),
+    }
+
+
 def _axis_fields(row) -> dict:
     return {
         "score_profit": row.get("score_profit"),
@@ -340,6 +349,7 @@ def _axis_fields(row) -> dict:
         "score_cashflow": row.get("score_cashflow"),
         "weak_axes": json.loads(row.get("weak_axes") or "[]"),
         "fcf_yield": row.get("fcf_yield"),
+        **_breakout(row),
     }
 
 
@@ -353,13 +363,15 @@ def _signal_settings(config_json: str) -> dict:
     스냅샷의 config_json에서 읽는다 - 지금 settings.yaml이 아니라 그 실행이
     무엇으로 판정했는지가 화면과 맞아야 한다. 없으면 SignalConfig 기본값.
     """
-    from stockscout.config import SignalConfig
+    from stockscout.config import BreakoutConfig, SignalConfig
 
-    raw = (json.loads(config_json or "{}") or {}).get("signal") or {}
-    signal = SignalConfig.model_validate(raw)
+    stored = json.loads(config_json or "{}") or {}
+    signal = SignalConfig.model_validate(stored.get("signal") or {})
+    breakout = BreakoutConfig.model_validate(stored.get("breakout") or {})
     return {"drawdown_months": signal.drawdown_months,
             "drawdown_threshold": signal.drawdown_threshold,
-            "drawdown_choices": signal.drawdown_choices}
+            "drawdown_choices": signal.drawdown_choices,
+            "breakout": breakout.model_dump()}
 
 
 def _window_stats(row) -> dict[int, dict]:
