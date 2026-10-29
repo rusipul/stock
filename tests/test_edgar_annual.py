@@ -118,3 +118,25 @@ def test_other_units_are_ignored():
     }}}
 
     assert "EarningsPerShareBasic" not in annual_facts(cf)[2025]["facts"]
+
+
+def test_a_stray_annual_footnote_does_not_move_the_fiscal_year_end():
+    """실측: PG(6월 결산)의 10-K 주석에 2023-10-01 ~ 2024-09-30 구조조정 비용이 있다.
+
+    기간이 12개월이라 연간으로 보이지만 회계연도가 아니다. 그 해 결산일을
+    "늦은 쪽"으로 고르면 2024년의 결산일이 9월 30일이 되어 매출·자산이
+    전부 사라진다. 그날짜로 끝나는 연간 항목이 가장 많은 날이 결산일이다.
+    """
+    cf = facts({
+        "Revenues": [fact(84, "2024-06-30", "2023-07-01")],
+        "NetIncomeLoss": [fact(14, "2024-06-30", "2023-07-01")],
+        "RestructuringAndRelatedCostIncurredCost": [
+            fact(1.2, "2024-09-30", "2023-10-01")],
+        "Assets": [fact(122, "2024-06-30")],
+    })
+
+    year = annual_facts(cf)[2024]
+
+    assert year["period_end"] == "2024-06-30"
+    assert year["facts"]["Revenues"] == 84
+    assert year["facts"]["Assets"] == 122

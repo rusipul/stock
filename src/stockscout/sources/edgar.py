@@ -63,15 +63,25 @@ def _fiscal_year_ends(entries: dict[str, list[dict]]) -> dict[int, date]:
     """회계연도 -> 결산일. 연간 흐름 항목의 end에서 얻는다.
 
     fy를 쓰지 않는다. 10-K의 전기 비교 수치가 그 공시의 fy를 달고 오기
-    때문이다(설계서 §18.2). 한 해에 결산일이 둘이면(결산월 변경) 늦은 쪽.
+    때문이다(설계서 §18.2).
+
+    한 해에 12개월짜리 기간의 end가 여럿이면 그날짜로 끝나는 태그가 가장
+    많은 날을 고른다. 주석에 회계연도가 아닌 12개월이 섞여 온다 - 실측:
+    PG(6월 결산)의 구조조정 비용 2023-10-01 ~ 2024-09-30. "늦은 쪽"으로
+    고르면 그 한 항목이 2024년의 결산일을 가져가 매출·자산이 전부 빠진다.
+    같으면 늦은 쪽(결산월을 바꾼 해).
     """
-    ends: dict[int, date] = {}
-    for items in entries.values():
+    tags_by_end: dict[date, set[str]] = {}
+    for tag, items in entries.items():
         for entry in items:
             if _is_annual_period(entry):
-                end = _date(entry["end"])
-                if end > ends.get(end.year, date.min):
-                    ends[end.year] = end
+                tags_by_end.setdefault(_date(entry["end"]), set()).add(tag)
+
+    ends: dict[int, date] = {}
+    for end, tags in tags_by_end.items():
+        best = ends.get(end.year)
+        if best is None or (len(tags), end) > (len(tags_by_end[best]), best):
+            ends[end.year] = end
     return ends
 
 
@@ -164,6 +174,13 @@ class EdgarSource:
             raise PermanentSourceError(f"SEC 티커 목록에 없습니다: {ticker}")
 
         by_year = annual_facts(self._get_json(FACTS_URL.format(cik=cik)))
+        if not by_year:
+            # 빈 목록을 조용히 돌려주면 collect_errors에 흔적이 남지 않는다.
+            # 실측: XOM은 신설 지주사(CIK 2115436)로 옮겨 아직 10-K가 없다.
+            raise PermanentSourceError(
+                f"SEC에 {ticker}(CIK {cik})의 연간 재무가 없습니다. "
+                "지주사 전환 등으로 티커의 CIK가 바뀌었을 수 있습니다."
+            )
         return [
             RawStatement(ticker=ticker, fiscal_year=year, source=self.name,
                          payload=by_year[year])

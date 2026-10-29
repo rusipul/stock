@@ -109,3 +109,19 @@ def test_429_is_retried_then_raised():
     with pytest.raises(ConnectionError):
         src.fetch_annual("AAPL", [2025])
     assert len(calls) == 3
+
+
+def test_a_company_with_no_annual_facts_is_a_permanent_failure():
+    """실측: XOM은 2026년 신설 지주사(CIK 2115436)로 옮겨 아직 10-K가 없다.
+
+    빈 목록을 조용히 돌려주면 collect_errors에 흔적이 없어 재무가 왜
+    비었는지 알 수 없다. 요청한 연도만 없는 것은 실패가 아니다.
+    """
+    src = make_source(routes(facts_body={"facts": {"dei": {}}}))
+
+    with pytest.raises(PermanentSourceError, match="AAPL"):
+        src.fetch_annual("AAPL", [2025])
+
+
+def test_years_missing_from_a_reporting_company_are_not_a_failure():
+    assert make_source(routes()).fetch_annual("AAPL", [2019]) == []
