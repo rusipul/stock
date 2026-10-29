@@ -142,6 +142,8 @@ function gradeOf(row) {
   if (row.score_total < state.minScore) return null;
   // 후보 = 최근 N개월 고점 대비 임계치 이하. 하락이 멈췄으면 별 둘, 아직
   // 빠지는 중이면 별 하나 (analysis/grading.py와 같다).
+  // 영역 최소점 미달(서버가 analysis/grading.weak_axes로 계산해 둔다).
+  if (row.weak_axes && row.weak_axes.length) return null;
   const dd = drawdownOf(row);
   if (dd === null || dd.drop_from_high > state.dropThreshold) return null;
   return dd.stabilized ? "STRONG" : "WATCH";
@@ -386,6 +388,50 @@ function renderDetail(d, prices) {
   ].join("");
   panel.appendChild(kpis);
 
+  // 최근 실적 변화. 5년 평균 점수가 최근 악화를 가릴 수 있다.
+  if (d.interim) {
+    const it = d.interim;
+    const rec = document.createElement("p");
+    rec.className = "interim" + (it.deteriorated ? " warn" : "");
+    const g = (v) => (v === null || v === undefined) ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(0) + "%";
+    rec.textContent =
+      `최근 실적 (${it.period_end.slice(0, 4)}년 ${it.months}개월 누적, 전년 동기 대비): `
+      + `매출 ${g(it.revenue_growth)} · 영업이익 ${g(it.operating_income_growth)}`
+      + ` · 영업이익률 ${pct(it.operating_margin_prior)} → ${pct(it.operating_margin)}`
+      + (it.deteriorated ? " · 주의: 최근 실적 급감" : "");
+    panel.appendChild(rec);
+  }
+
+  // 최근 공시. 하락 원인과 회복 계기는 사람이 판단한다 - 그 재료를 보인다.
+  if (d.filings && d.filings.length) {
+    panel.appendChild(sectionTitle("최근 공시"));
+    const ul = document.createElement("ul");
+    ul.className = "filings";
+    for (const f of d.filings) {
+      const li = document.createElement("li");
+      const tag = FILING_LABELS[f.category];
+      li.innerHTML = `<span class="fdate">${escapeHtml(f.filed)}</span>`
+        + (tag ? `<span class="ftag ${f.category.toLowerCase()}">${tag}</span>` : "")
+        + `<a href="${escapeHtml(f.url)}" target="_blank" rel="noopener">${escapeHtml(f.title)}</a>`;
+      ul.appendChild(li);
+    }
+    panel.appendChild(ul);
+  }
+
+  // 가치평가. 많이 떨어졌어도 여전히 비쌀 수 있다. 점수에는 넣지 않는다(§8.2).
+  const val = document.createElement("p");
+  val.className = "valuation";
+  const ratio = (v) => (v === null || v === undefined) ? "—" : v.toFixed(1) + "배";
+  val.textContent = [
+    `시가총액 ${amount(d.market_cap)}`,
+    `PER ${ratio(d.per)}`,
+    `PBR ${ratio(d.pbr)}`,
+    `FCF 수익률 ${pct(d.fcf_yield)}`,
+    dd && dd.period_return !== null && dd.period_return !== undefined
+      ? `${state.months}개월 수익률 ${pct(dd.period_return)}` : null,
+  ].filter(Boolean).join(" · ");
+  panel.appendChild(val);
+
   // 점수 분해 (설계서 §11.2). 제외된 종목은 채점하지 않았으므로 막대가 없다.
   if (d.score_detail) {
     panel.appendChild(sectionTitle("점수 분해"));
@@ -414,6 +460,9 @@ function renderDetail(d, prices) {
 
   drawChart(prices);
 }
+
+const FILING_LABELS = { RISK: "위험", DILUTION: "자금조달", EARNINGS: "실적", LEGAL: "소송",
+                        CATALYST: "수주·주주환원" };
 
 const BENCHMARK_LABELS = { "^KS11": "코스피", "^KQ11": "코스닥", "^GSPC": "S&P 500" };
 
@@ -567,6 +616,9 @@ function drawChart(p) {
     type: "line",
     data: { labels, datasets },
     options: {
+      // 애니메이션을 끈다. 1,200점짜리 선 6개를 애니메이션할 이유가 없고,
+      // 화면 없는 브라우저(검증 스크립트)에서는 그리다 멈춰 선이 중간에서 끊겼다.
+      animation: false,
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },

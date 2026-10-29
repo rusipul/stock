@@ -259,3 +259,23 @@ table.fin th:first-child, table.fin td:first-child { text-align: left; }
   white-space: nowrap;   /* 좁은 화면에서 '한/국'으로 쪼개지지 않게 */
 }
 #market-tabs .tab.on { background: #e2e8f0; color: #2d3748; border-color: #e2e8f0; }
+
+/* 가치평가 한 줄 */
+.valuation { color: var(--muted); font-size: 13px; margin: -8px 0 16px; }
+
+/* 최근 공시 */
+.filings { list-style: none; margin: 0 0 18px; padding: 0; font-size: 13px; }
+.filings li { padding: 4px 0; border-bottom: 1px dashed var(--border, #e2e8f0); }
+.filings a { color: inherit; text-decoration: none; }
+.filings a:hover { text-decoration: underline; }
+.fdate { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+.ftag { font-size: 11px; padding: 1px 6px; border-radius: 4px; margin-right: 6px;
+        background: #edf2f7; color: #4a5568; }
+.ftag.risk { background: #fed7d7; color: #c53030; }
+.ftag.dilution { background: #fefcbf; color: #975a16; }
+.ftag.earnings { background: #e6fffa; color: #2c7a7b; }
+.ftag.catalyst { background: #e9d8fd; color: #6b46c1; }
+
+/* 최근 실적 변화 */
+.interim { font-size: 13px; margin: -8px 0 16px; color: var(--muted); }
+.interim.warn { color: #c53030; font-weight: 600; }
