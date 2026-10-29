@@ -11,6 +11,12 @@ const state = {
   chart: null,
 };
 
+// 정적 사이트(Vercel)로 내보낸 화면이면 true다. stockscout export가
+// index.html에 심는다 (web/export.py). 그때는 API 대신 내보낸 JSON 파일을
+// 읽고, 서버가 하던 검색·정렬은 브라우저가 하고, 관심종목은 방문자
+// 브라우저(localStorage)에 둔다 - 공개 사이트는 읽기 전용이다.
+const STATIC = typeof window !== "undefined" && window.STOCKSCOUT_STATIC === true;
+
 const $ = (id) => document.getElementById(id);
 const pct = (v) => (v === null || v === undefined) ? "—" : (v * 100).toFixed(1) + "%";
 // 금액은 전부 이 함수를 거친다. 시장마다 통화가 다르다 (설계서 §18.5).
@@ -51,6 +57,42 @@ function savePrefs() {
     localStorage.setItem("stockscout.dropThreshold", String(state.dropThreshold));
     localStorage.setItem("stockscout.minScore", String(state.minScore));
     localStorage.setItem("stockscout.market", state.market);
+  } catch (e) { /* 저장 실패는 기능을 막지 않는다 */ }
+}
+
+// 검색·정렬. 정적 모드에서만 쓴다. 규칙은 api.list_securities와 같다 -
+// 하락률 오름차순(없는 종목은 뒤), 이름순, 코드순. 이름은 localeCompare가
+// 아니라 코드포인트로 비교한다(파이썬 sort와 같게).
+function filterAndSort(rows, q, sort) {
+  const needle = q.toLowerCase();
+  const out = needle
+    ? rows.filter((r) => r.name.toLowerCase().includes(needle)
+                      || r.ticker.toLowerCase().includes(needle))
+    : rows.slice();
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  if (sort === "drop") {
+    out.sort((a, b) => {
+      const na = a.drop_vs_avg_5y === null, nb = b.drop_vs_avg_5y === null;
+      if (na !== nb) return na ? 1 : -1;
+      return (a.drop_vs_avg_5y || 0) - (b.drop_vs_avg_5y || 0);
+    });
+  } else if (sort === "name") {
+    out.sort((a, b) => cmp(a.name, b.name));
+  } else {
+    out.sort((a, b) => cmp(a.ticker, b.ticker));
+  }
+  return out;
+}
+
+function loadWatchlist() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem("stockscout.watchlist") || "[]"));
+  } catch (e) { return new Set(); }
+}
+
+function saveWatchlist(set) {
+  try {
+    localStorage.setItem("stockscout.watchlist", JSON.stringify([...set]));
   } catch (e) { /* 저장 실패는 기능을 막지 않는다 */ }
 }
 
@@ -227,8 +269,14 @@ function renderList() {
 }
 
 async function toggleWatch(row) {
-  const method = row.in_watchlist ? "DELETE" : "POST";
-  await fetch(`/api/watchlist/${encodeURIComponent(row.ticker)}`, { method });
+  if (STATIC) {
+    const watched = loadWatchlist();
+    if (row.in_watchlist) watched.delete(row.ticker); else watched.add(row.ticker);
+    saveWatchlist(watched);
+  } else {
+    const method = row.in_watchlist ? "DELETE" : "POST";
+    await fetch(`/api/watchlist/${encodeURIComponent(row.ticker)}`, { method });
+  }
   row.in_watchlist = !row.in_watchlist;
   renderList();
 }
@@ -260,10 +308,11 @@ async function selectTicker(ticker) {
   const panel = $("detail-panel");
   panel.innerHTML = `<p class="placeholder">불러오는 중…</p>`;
   try {
-    const [detail, prices] = await Promise.all([
-      getJSON(`/api/securities/${encodeURIComponent(ticker)}`),
-      getJSON(`/api/securities/${encodeURIComponent(ticker)}/prices`),
-    ]);
+    const t = encodeURIComponent(ticker);
+    const [detail, prices] = await Promise.all(STATIC
+      ? [getJSON(`/data/securities/${t}.json`), getJSON(`/data/securities/${t}.prices.json`)]
+      : [getJSON(`/api/securities/${t}`), getJSON(`/api/securities/${t}/prices`)]);
+    if (STATIC) detail.in_watchlist = loadWatchlist().has(ticker);
     renderDetail(detail, prices);
   } catch (err) {
     panel.innerHTML = `<p class="placeholder">${err.message}</p>`;
@@ -532,9 +581,16 @@ async function reload() {
   if (!state.snapshot) return;   // 이 시장은 아직 분석하지 않았다
   const q = $("search").value.trim();
   const sort = $("sort").value;
-  const params = new URLSearchParams({ market: state.market, sort });
-  if (q) params.set("q", q);
-  state.rows = await getJSON(`/api/securities?${params}`);
+  if (STATIC) {
+    const watched = loadWatchlist();
+    const rows = await getJSON(`/data/${state.market}/securities.json`);
+    for (const r of rows) r.in_watchlist = watched.has(r.ticker);
+    state.rows = filterAndSort(rows, q, sort);
+  } else {
+    const params = new URLSearchParams({ market: state.market, sort });
+    if (q) params.set("q", q);
+    state.rows = await getJSON(`/api/securities?${params}`);
+  }
   renderHitCount();
   renderList();
 }
@@ -547,10 +603,14 @@ async function loadMarket() {
   state.rows = [];
   $("detail-panel").innerHTML = `<p class="placeholder">왼쪽에서 종목을 선택하세요.</p>`;
   try {
-    state.snapshot = await getJSON(`/api/snapshot?market=${state.market}`);
+    state.snapshot = await getJSON(STATIC
+      ? `/data/${state.market}/snapshot.json`
+      : `/api/snapshot?market=${state.market}`);
   } catch (err) {
     state.snapshot = null;
-    $("snapshot-info").textContent = err.message;
+    $("snapshot-info").textContent = STATIC
+      ? `아직 공개된 ${state.market === "US" ? "미국" : "한국"} 분석 결과가 없습니다.`
+      : err.message;
     $("hit-count").textContent = "";
     $("chips").innerHTML = "";
     $("stock-list").innerHTML = "";

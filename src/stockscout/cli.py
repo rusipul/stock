@@ -270,6 +270,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_srv.add_argument("--host", default="127.0.0.1")
     p_srv.add_argument("--port", type=int, default=8000)
 
+    p_exp = sub.add_parser(
+        "export", help="최신 스냅샷을 정적 사이트로 내보낸다 (Vercel 등에 올린다)")
+    p_exp.add_argument("--out", default="site", help="내보낼 폴더 (기본: site)")
+
     return parser
 
 
@@ -327,6 +331,12 @@ def main(argv: list[str] | None = None) -> int:
 
         elif args.command == "serve":
             serve(args.db, host=args.host, port=args.port)
+
+        elif args.command == "export":
+            # web/은 무거운 import(fastapi)라 serve처럼 필요할 때만 불러온다.
+            from stockscout.web.export import export_site
+
+            print(export_site(args.db, args.out).render())
 
     return 0
 

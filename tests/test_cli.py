@@ -604,3 +604,19 @@ def test_build_fundamentals_passes_the_cik_overrides(monkeypatch):
     source, _ = build_fundamentals(skip=False, years=[2025], market="US")
 
     assert source.cik_overrides["XOM"] == 34088
+
+
+def test_export_command_writes_a_static_site(tmp_path, capsys):
+    db = tmp_path / "t.db"
+    with connect(db) as conn:
+        init_db(conn)
+        Repository(conn).save_snapshot(
+            Snapshot(run_at="x", config_hash="h", config_json="{}"), [])
+    out = tmp_path / "site"
+
+    code = main(["--db", str(db), "--config", "config/settings.yaml",
+                 "export", "--out", str(out)])
+
+    assert code == 0
+    assert (out / "data/KR/snapshot.json").exists()
+    assert "KR" in capsys.readouterr().out

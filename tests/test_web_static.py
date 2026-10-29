@@ -443,3 +443,51 @@ def test_the_financials_table_formats_amounts_with_amount():
 
     assert "money(" not in body
     assert body.count("amount(") == 3
+
+
+# --- 정적 사이트 모드 (Vercel) -----------------------------------------
+
+
+def _run_node(script):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node 가 없어 실행 검사를 건너뛴다")
+    out = subprocess.run([node, "-e", script], capture_output=True,
+                         text=True, encoding="utf-8")
+    assert out.returncode == 0, out.stderr
+    return out.stdout
+
+
+def test_static_filter_and_sort_follow_the_server_rules():
+    """정적 화면은 서버 대신 브라우저가 검색·정렬한다. 규칙이 api.list_securities와 같아야 한다."""
+    rows = (
+        '[{"ticker":"B","name":"베타","drop_vs_avg_5y":-0.1},'
+        '{"ticker":"A","name":"알파","drop_vs_avg_5y":null},'
+        '{"ticker":"C","name":"Charlie","drop_vs_avg_5y":-0.5}]'
+    )
+    script = (
+        f"{_function_body(js_text(), 'filterAndSort')}\n"
+        f"const rows = {rows};\n"
+        "const t = (q, s) => filterAndSort(rows, q, s).map(r => r.ticker).join('');\n"
+        "console.log(t('', 'drop'), t('', 'name'), t('', 'ticker'), t('char', 'drop'), t('b', 'drop'));"
+    )
+
+    # 하락률 오름차순, 하락률 없는 종목은 뒤 / 이름순 / 코드순 / 이름 검색 / 코드 검색
+    assert _run_node(script).split() == ["CBA", "CBA", "ABC", "C", "B"]
+
+
+def test_static_mode_reads_exported_files():
+    js = js_text()
+
+    assert "STOCKSCOUT_STATIC" in js
+    assert "data/${state.market}/snapshot.json" in _function_body(js, "loadMarket")
+    assert "data/${state.market}/securities.json" in _function_body(js, "reload")
+    assert ".prices.json" in _function_body(js, "selectTicker")
+
+
+def test_static_watchlist_lives_in_the_browser():
+    """공개 사이트는 읽기 전용이다. 관심종목은 방문자 브라우저에 둔다."""
+    body = _function_body(js_text(), "toggleWatch")
+
+    assert "STATIC" in body
+    assert "stockscout.watchlist" in js_text()
