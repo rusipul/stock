@@ -7,7 +7,14 @@ kr_mapping.py의 분담과 같다.
 
 from __future__ import annotations
 
+import time
 from datetime import date
+
+import httpx
+
+from stockscout.models import RawStatement
+from stockscout.sources.base import FatalSourceError, PermanentSourceError
+from stockscout.sources.ratelimit import TokenBucket
 
 ANNUAL_FORMS = {"10-K", "10-K/A"}
 
@@ -102,3 +109,93 @@ def annual_facts(companyfacts: dict) -> dict[int, dict]:
                 picked[tag] = best["val"]
         out[year] = {"period_end": year_end.isoformat(), "facts": picked}
     return out
+
+
+TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
+
+# 재시도할 상태. 429(속도 제한)와 5xx는 정의상 일시적이다.
+RETRY_STATUSES = {429, 500, 502, 503, 504}
+RETRY_ATTEMPTS = 3
+
+
+class SecTemporarilyUnavailable(ConnectionError):
+    """SEC가 지금 응답을 내주지 못한다 (429·5xx).
+
+    ConnectionError를 상속하는 이유는 dart.DartServiceUnavailable과 같다 -
+    '지금은 연결해 데이터를 받을 수 없다'는 뜻이고, 다 써도 실패하면
+    네트워크 장애와 똑같이 그 종목만 실패한다.
+    """
+
+
+def parse_company_tickers(data: dict) -> dict[str, int]:
+    """company_tickers.json -> {티커: CIK}. 티커는 대문자, SEC 표기(BRK-B) 그대로."""
+    return {row["ticker"].upper(): int(row["cik_str"]) for row in data.values()}
+
+
+class EdgarSource:
+    """FundamentalSource 프로토콜 구현.
+
+    DART와 달리 회사당 호출 1회로 전 연도가 온다. 받은 것을 연도별로
+    나눠 요청한 연도만 돌려준다.
+    """
+
+    name = "edgar"
+
+    def __init__(
+        self,
+        user_agent: str,
+        rate_per_sec: float = 5.0,
+        client: httpx.Client | None = None,
+    ) -> None:
+        # SEC 한도는 초당 10회다. 절반으로 둔다.
+        self._headers = {"User-Agent": user_agent,
+                         "Accept-Encoding": "gzip, deflate"}
+        self.bucket = TokenBucket(rate_per_sec)
+        self._client = client or httpx.Client(timeout=30)
+        self._retry_delay = 1.0
+        self.ciks: dict[str, int] = {}
+
+    def fetch_annual(self, ticker: str, years: list[int]) -> list[RawStatement]:
+        if not self.ciks:
+            self.ciks = parse_company_tickers(self._get_json(TICKERS_URL))
+        cik = self.ciks.get(ticker.upper())
+        if cik is None:
+            raise PermanentSourceError(f"SEC 티커 목록에 없습니다: {ticker}")
+
+        by_year = annual_facts(self._get_json(FACTS_URL.format(cik=cik)))
+        return [
+            RawStatement(ticker=ticker, fiscal_year=year, source=self.name,
+                         payload=by_year[year])
+            for year in years if year in by_year
+        ]
+
+    def _get_json(self, url: str) -> dict:
+        """GET 하나. 429·5xx만 지수 백오프로 재시도한다.
+
+        retry_on_transient를 쓰지 않는 이유: 그 데코레이터는 TRANSIENT
+        예외만 보는데, 여기서는 HTTP 상태를 보고 판단해야 한다. 상태를
+        SecTemporarilyUnavailable로 바꿔 던지고 같은 횟수만 재시도한다.
+        """
+        last: Exception | None = None
+        for attempt in range(RETRY_ATTEMPTS):
+            self.bucket.wait()
+            resp = self._client.get(url, headers=self._headers)
+            if resp.status_code in RETRY_STATUSES:
+                last = SecTemporarilyUnavailable(
+                    f"SEC가 일시적으로 응답하지 않습니다 ({resp.status_code}): {url}")
+                if attempt < RETRY_ATTEMPTS - 1 and self._retry_delay > 0:
+                    time.sleep(self._retry_delay * (2 ** attempt))
+                continue
+            if resp.status_code == 403:
+                # 이 종목이 아니라 요청 자체가 막혔다. 남은 종목도 전부 403이다.
+                raise FatalSourceError(
+                    "SEC가 요청을 거부했습니다(403). config/.env의 "
+                    "SEC_USER_AGENT에 연락처(이메일)가 들어 있는지 확인하세요."
+                )
+            if resp.status_code == 404:
+                raise PermanentSourceError(f"SEC에 데이터가 없습니다(404): {url}")
+            resp.raise_for_status()
+            return resp.json()
+        assert last is not None
+        raise last
