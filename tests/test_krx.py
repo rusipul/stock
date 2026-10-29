@@ -106,3 +106,8 @@ def test_universe_skips_tickers_whose_name_lookup_fails():
     secs = uni.fetch()
 
     assert [s.ticker for s in secs] == ["005930.KS"]
+
+
+def test_kosdaq_codes_get_the_kq_suffix():
+    assert to_ticker("247540", exchange="KOSDAQ") == "247540.KQ"
+    assert to_ticker("247540.KQ", exchange="KOSDAQ") == "247540.KQ"

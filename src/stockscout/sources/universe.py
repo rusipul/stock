@@ -58,21 +58,26 @@ class YamlUniverse:
         section = raw[self.market]
         exchange = section.get("exchange")
         currency = section.get("currency")
-        tickers: list[str] = [str(t) for t in section.get("tickers", [])]
+        # (코드, 거래소). KR 섹션의 kosdaq 목록은 코스닥 종목이다 - 접미사(.KQ)와
+        # 거래소 표시, 시장 비교 지수(코스닥)가 달라진다.
+        tickers: list[tuple[str, str | None]] = (
+            [(str(t), exchange) for t in section.get("tickers", [])]
+            + [(str(t), "KOSDAQ") for t in section.get("kosdaq", [])]
+        )
         names: dict[str, str] = {
             self._symbol(str(k)): v for k, v in (section.get("names") or {}).items()
         }
         financial = {self._symbol(str(t)) for t in section.get("is_financial", [])}
 
         securities: list[Security] = []
-        for code in tickers:
+        for code, code_exchange in tickers:
             symbol = self._symbol(code)
             securities.append(
                 Security(
-                    ticker=self._ticker(code),
+                    ticker=self._ticker(code, code_exchange),
                     market=self.market,
                     name=names.get(symbol) or self._lookup_name(code),
-                    exchange=exchange,
+                    exchange=code_exchange,
                     currency=currency,
                     is_financial=symbol in financial,
                     in_universe=True,
@@ -84,13 +89,15 @@ class YamlUniverse:
         """YAML에 적힌 코드를 비교용으로 맞춘다. 미국 티커는 대문자다."""
         return code if self.market == "KR" else code.upper()
 
-    def _ticker(self, code: str) -> str:
+    def _ticker(self, code: str, exchange: str | None = None) -> str:
         """DB의 ticker. 한국은 거래소 접미사를 붙이고 미국은 그대로 둔다.
 
         미국은 SEC(company_tickers.json)와 Yahoo가 둘 다 'BRK-B'처럼 하이픈을
         쓴다. 변환하지 않는 것이 두 소스를 함께 맞추는 방법이다.
         """
-        return to_ticker(code) if self.market == "KR" else code.upper()
+        if self.market == "KR":
+            return to_ticker(code, exchange if exchange == "KOSDAQ" else "KOSPI")
+        return code.upper()
 
     def _lookup_name(self, code: str) -> str:
         """YAML에 이름이 없을 때. pykrx는 한국 종목만 안다."""

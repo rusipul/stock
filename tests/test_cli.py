@@ -620,3 +620,16 @@ def test_export_command_writes_a_static_site(tmp_path, capsys):
     assert code == 0
     assert (out / "data/KR/snapshot.json").exists()
     assert "KR" in capsys.readouterr().out
+
+
+
+def test_resolve_tickers_finds_a_kosdaq_code(repo, capsys):
+    """6자리 코드에 무조건 .KS를 붙이면 코스닥 종목은 '알 수 없는 종목'이 된다."""
+    from stockscout.cli import resolve_tickers
+
+    repo.upsert_security(Security(ticker="247540.KQ", market="KR",
+                                  name="에코프로비엠", exchange="KOSDAQ",
+                                  currency="KRW"))
+
+    assert resolve_tickers(repo, market="KR", tickers=["247540"]) == ["247540.KQ"]
+    assert "알 수 없는" not in capsys.readouterr().out

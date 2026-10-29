@@ -145,10 +145,12 @@ def resolve_tickers(
     """
     if tickers is None:
         return None
-    if market == "KR":
-        tickers = [to_ticker(t) for t in tickers]
-
     known = {s.ticker: s for s in repo.list_securities(market=market, in_universe_only=False)}
+    if market == "KR":
+        # 6자리 코드만 주면 DB에서 거래소 접미사를 찾는다(코스피 .KS, 코스닥 .KQ).
+        # 없으면 .KS로 둔다 - 아래에서 '알 수 없는 종목'으로 경고된다.
+        by_code = {t.split(".")[0]: t for t in known}
+        tickers = [t if "." in t else by_code.get(t, to_ticker(t)) for t in tickers]
     for ticker in tickers:
         security = known.get(ticker)
         if security is None:

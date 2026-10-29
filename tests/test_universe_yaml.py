@@ -168,7 +168,8 @@ def test_real_universe_yaml_loads_via_yaml_universe():
 
     secs = uni.fetch()
 
-    assert len(secs) == 42
+    assert len(secs) == 72   # 코스피 42 + 코스닥 30
+    assert sum(1 for s in secs if s.exchange == "KOSPI") == 42
     financial_count = sum(1 for s in secs if s.is_financial)
     assert financial_count == 7
 
@@ -266,3 +267,24 @@ def test_the_real_universe_points_xom_at_the_old_cik():
     from stockscout.sources.universe import load_cik_overrides
 
     assert load_cik_overrides()["XOM"] == 34088
+
+
+
+def test_kosdaq_tickers_get_their_own_suffix_and_exchange(tmp_path):
+    """코스닥 종목에 .KS·KOSPI가 붙으면 화면과 시장 비교 지수가 틀린다."""
+    path = _write_universe(tmp_path, SAMPLE_YAML + '  kosdaq:\n    - "247540"\n')
+
+    secs = {s.ticker: s for s in YamlUniverse(
+        path=path, market="KR", name_fn=lambda code: code).fetch()}
+
+    assert secs["247540.KQ"].exchange == "KOSDAQ"
+    assert secs["005930.KS"].exchange == "KOSPI"
+    assert secs["247540.KQ"].currency == "KRW"
+
+
+def test_the_real_universe_has_thirty_kosdaq_tickers():
+    secs = YamlUniverse(market="KR", name_fn=lambda code: code).fetch()
+    kosdaq = [s for s in secs if s.exchange == "KOSDAQ"]
+
+    assert len(kosdaq) == 30
+    assert all(s.ticker.endswith(".KQ") for s in kosdaq)

@@ -17,9 +17,16 @@ CLOSE_COLUMN = "종가"
 VOLUME_COLUMN = "거래량"
 
 
-def to_ticker(stock_code: str) -> str:
-    """'005930' → '005930.KS'. 이미 접미사가 있으면 그대로 둔다."""
-    return stock_code if "." in stock_code else f"{stock_code}.KS"
+# 거래소 -> Yahoo식 접미사. DB의 ticker가 이 형식이다.
+EXCHANGE_SUFFIX = {"KOSPI": ".KS", "KOSDAQ": ".KQ"}
+
+
+def to_ticker(stock_code: str, exchange: str = "KOSPI") -> str:
+    """'005930' → '005930.KS', 코스닥이면 '247540' → '247540.KQ'.
+
+    이미 접미사가 있으면 그대로 둔다.
+    """
+    return stock_code if "." in stock_code else stock_code + EXCHANGE_SUFFIX[exchange]
 
 
 def _default_ohlcv_fn(fromdate: str, todate: str, ticker: str) -> pd.DataFrame:
