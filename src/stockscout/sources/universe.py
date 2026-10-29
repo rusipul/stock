@@ -58,26 +58,62 @@ class YamlUniverse:
         section = raw[self.market]
         exchange = section.get("exchange")
         currency = section.get("currency")
-        tickers: list[str] = section.get("tickers", [])
-        financial: set[str] = set(section.get("is_financial", []))
+        tickers: list[str] = [str(t) for t in section.get("tickers", [])]
+        names: dict[str, str] = {
+            self._symbol(str(k)): v for k, v in (section.get("names") or {}).items()
+        }
+        financial = {self._symbol(str(t)) for t in section.get("is_financial", [])}
 
         securities: list[Security] = []
         for code in tickers:
-            try:
-                name = self._name(code)
-            except Exception:
-                # 손으로 고른 목록이라 조회 실패는 일시적 네트워크 문제일 뿐,
-                # 종목이 잘못된 게 아니다. KrxUniverse와 달리 건너뛰지 않는다.
-                name = code
+            symbol = self._symbol(code)
             securities.append(
                 Security(
-                    ticker=to_ticker(code),
+                    ticker=self._ticker(code),
                     market=self.market,
-                    name=name,
+                    name=names.get(symbol) or self._lookup_name(code),
                     exchange=exchange,
                     currency=currency,
-                    is_financial=code in financial,
+                    is_financial=symbol in financial,
                     in_universe=True,
                 )
             )
         return securities
+
+    def _symbol(self, code: str) -> str:
+        """YAML에 적힌 코드를 비교용으로 맞춘다. 미국 티커는 대문자다."""
+        return code if self.market == "KR" else code.upper()
+
+    def _ticker(self, code: str) -> str:
+        """DB의 ticker. 한국은 거래소 접미사를 붙이고 미국은 그대로 둔다.
+
+        미국은 SEC(company_tickers.json)와 Yahoo가 둘 다 'BRK-B'처럼 하이픈을
+        쓴다. 변환하지 않는 것이 두 소스를 함께 맞추는 방법이다.
+        """
+        return to_ticker(code) if self.market == "KR" else code.upper()
+
+    def _lookup_name(self, code: str) -> str:
+        """YAML에 이름이 없을 때. pykrx는 한국 종목만 안다."""
+        if self.market != "KR":
+            return self._symbol(code)
+        try:
+            return self._name(code)
+        except Exception:
+            # 손으로 고른 목록이라 조회 실패는 일시적 네트워크 문제일 뿐,
+            # 종목이 잘못된 게 아니다. KrxUniverse와 달리 건너뛰지 않는다.
+            return code
+
+
+def load_cik_overrides(path: Path | str = DEFAULT_UNIVERSE_PATH) -> dict[str, int]:
+    """universe.yaml US 섹션의 cik: {티커: CIK}. 없으면 빈 dict.
+
+    SEC 티커 목록의 CIK가 틀릴 때 쓴다 - XOM은 목록이 아직 10-K가 없는
+    신설 지주사를 가리킨다(설계서 §18.4). 유니버스와 같은 파일에 두는
+    이유: 어느 종목을 볼지와 그 종목을 어디서 찾을지는 함께 바뀐다.
+    """
+    path = Path(path)
+    if not path.exists():
+        return {}
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    section = raw.get("US") or {}
+    return {str(k).upper(): int(v) for k, v in (section.get("cik") or {}).items()}

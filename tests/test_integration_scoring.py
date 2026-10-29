@@ -21,7 +21,7 @@ pytestmark = pytest.mark.skipif(
 def rows():
     with connect(DEFAULT_DB_PATH) as conn:
         repo = Repository(conn)
-        snap = repo.get_latest_snapshot()
+        snap = repo.get_latest_snapshot(market="KR")
         if snap is None:
             pytest.skip("스냅샷이 없다")
         data = repo.get_analysis_results(snap.snapshot_id)

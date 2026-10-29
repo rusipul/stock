@@ -12,6 +12,7 @@ from stockscout.normalize.kr_mapping import (
     apply_share_counts,
     normalize_dart_statement,
 )
+from stockscout.normalize.us_mapping import normalize_edgar_statement
 from stockscout.store.repository import Repository
 
 # 보강 함수는 이미 만들어진 Financials를 제자리에서 고친다.
@@ -19,9 +20,11 @@ Enricher = Callable[[Financials, dict], None]
 
 # 시장별 (원본 source 식별자, 정규화 함수). raw_financials는 (ticker, fiscal_year,
 # source)로 dart/edgar를 함께 담으므로, 정규화기가 자기 것만 골라 보게
-# source를 함께 등록한다. 계획 D에서 "US": ("edgar", normalize_edgar_statement)
-# 를 추가한다.
-NORMALIZERS = {"KR": ("dart", normalize_dart_statement)}
+# source를 함께 등록한다.
+NORMALIZERS = {
+    "KR": ("dart", normalize_dart_statement),
+    "US": ("edgar", normalize_edgar_statement),
+}
 
 # 재무제표 위에 얹는 보강 소스: (원본 source, 적용 함수).
 # 재무제표가 있는 연도에만 얹는다 — 주식수만 있는 연도에 Financials 행을

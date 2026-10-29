@@ -245,3 +245,16 @@ table.fin th:first-child, table.fin td:first-child { text-align: left; }
 .grade.strong { color: var(--down); }
 .grade.watch  { color: #dd6b20; }
 #stock-list li.selected .grade { color: #fff; }
+
+/* 시장 탭 (설계서 §18.5) */
+#market-tabs { display: flex; gap: 4px; }
+#market-tabs .tab {
+  border: 1px solid #4a5568;
+  background: transparent;
+  color: #a0aec0;
+  border-radius: 4px;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+#market-tabs .tab.on { background: #e2e8f0; color: #2d3748; border-color: #e2e8f0; }

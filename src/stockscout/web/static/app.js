@@ -1,6 +1,7 @@
 "use strict";
 
 const state = {
+  market: "KR",
   rows: [],
   snapshot: null,
   selected: null,
@@ -12,7 +13,15 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 const pct = (v) => (v === null || v === undefined) ? "—" : (v * 100).toFixed(1) + "%";
-const won = (v) => (v === null || v === undefined) ? "—" : v.toLocaleString("ko-KR", { maximumFractionDigits: 0 });
+// 금액은 전부 이 함수를 거친다. 시장마다 통화가 다르다 (설계서 §18.5).
+// 달러는 센트까지, 원은 정수로.
+function money(v) {
+  if (v === null || v === undefined) return "—";
+  if (state.market === "US") {
+    return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  return v.toLocaleString("ko-KR", { maximumFractionDigits: 0 });
+}
 const signClass = (v) => (v === null || v === undefined) ? "" : (v < 0 ? "neg" : "pos");
 
 // 슬라이더 값은 다음 방문에 복원한다. 설정 파일 기본값은 건드리지 않는다 (설계서 §11.1).
@@ -22,6 +31,8 @@ function loadPrefs() {
     if (saved !== null) state.dropThreshold = parseFloat(saved);
     const minScore = localStorage.getItem("stockscout.minScore");
     if (minScore !== null) state.minScore = parseFloat(minScore);
+    const market = localStorage.getItem("stockscout.market");
+    if (market === "KR" || market === "US") state.market = market;
   } catch (e) { /* 시크릿 모드 등에서 막힐 수 있다 */ }
 }
 
@@ -29,6 +40,7 @@ function savePrefs() {
   try {
     localStorage.setItem("stockscout.dropThreshold", String(state.dropThreshold));
     localStorage.setItem("stockscout.minScore", String(state.minScore));
+    localStorage.setItem("stockscout.market", state.market);
   } catch (e) { /* 저장 실패는 기능을 막지 않는다 */ }
 }
 
@@ -84,6 +96,25 @@ function visibleRows() {
 
 // --- 렌더 ------------------------------------------------------------
 
+const MARKETS = [["KR", "한국"], ["US", "미국"]];
+
+function renderMarketTabs() {
+  const nav = $("market-tabs");
+  nav.innerHTML = "";
+  for (const [key, label] of MARKETS) {
+    const b = document.createElement("button");
+    b.className = "tab" + (state.market === key ? " on" : "");
+    b.textContent = label;
+    b.onclick = async () => {
+      if (state.market === key) return;
+      state.market = key;
+      savePrefs();
+      await loadMarket();
+    };
+    nav.appendChild(b);
+  }
+}
+
 function renderSnapshotInfo() {
   const s = state.snapshot;
   const parts = [`기준일 ${s.as_of ?? "?"}`, `${s.total}종목`,
@@ -101,7 +132,9 @@ function renderScoreBlock() {
   $("score-hint").textContent = hasScores
     ? ""
     : "재무 데이터가 없어 우량주 점수를 계산하지 못했습니다. "
-      + "DART 인증키를 넣고 collect · normalize · analyze 를 실행하면 켜집니다.";
+      + (state.market === "US"
+        ? "SEC_USER_AGENT에 연락처를 넣고 collect · normalize · analyze 를 실행하면 켜집니다."
+        : "DART 인증키를 넣고 collect · normalize · analyze 를 실행하면 켜집니다.");
 }
 
 function renderChips() {
@@ -203,6 +236,14 @@ const DART_GUIDE = `<div class="empty-state">
    stockscout analyze --market KR</pre>
 </div>`;
 
+const EDGAR_GUIDE = `<div class="empty-state">
+  <b>재무 데이터가 아직 없습니다</b>
+  config/.env 의 SEC_USER_AGENT 에 연락처(이메일)를 넣고 실행하세요.
+  <pre>stockscout collect --market US
+stockscout normalize --market US
+stockscout analyze --market US</pre>
+</div>`;
+
 async function selectTicker(ticker) {
   state.selected = ticker;
   renderList();
@@ -251,7 +292,7 @@ function renderDetail(d, prices) {
   const kpis = document.createElement("div");
   kpis.className = "kpis";
   kpis.innerHTML = [
-    kpi(won(d.price_current), "현재가"),
+    kpi(money(d.price_current), "현재가"),
     kpi(pct(d.drop_vs_avg_5y), "5년평균 대비", signClass(d.drop_vs_avg_5y)),
     kpi(pct(d.drop_vs_high), "5년고점 대비", signClass(d.drop_vs_high)),
     d.score_total === null
@@ -280,7 +321,7 @@ function renderDetail(d, prices) {
   panel.appendChild(sectionTitle("재무 추이"));
   if (!d.financials.length) {
     const box2 = document.createElement("div");
-    box2.innerHTML = DART_GUIDE;
+    box2.innerHTML = state.market === "US" ? EDGAR_GUIDE : DART_GUIDE;
     panel.appendChild(box2);
   } else {
     panel.appendChild(financialsTable(d.financials));
@@ -392,12 +433,12 @@ function financialsTable(rows) {
 
   table.innerHTML =
     `<tr><th>항목</th>${years.map((y) => `<th>${y}</th>`).join("")}</tr>` +
-    line("매출", (r) => won(r.revenue)) +
-    line("영업이익", (r) => won(r.operating_income)) +
+    line("매출", (r) => money(r.revenue)) +
+    line("영업이익", (r) => money(r.operating_income)) +
     line("영업이익률", (r) => pct(r.operating_margin)) +
     line("ROE", (r) => pct(r.roe)) +
     line("부채비율", (r) => r.debt_ratio === null ? "—" : r.debt_ratio.toFixed(1) + "%") +
-    line("영업현금흐름", (r) => won(r.operating_cash_flow));
+    line("영업현금흐름", (r) => money(r.operating_cash_flow));
   return table;
 }
 
@@ -424,7 +465,7 @@ function drawChart(p) {
   }];
   for (const [label, value, color] of refs) {
     datasets.push({
-      label: `${label} ${won(value)}`,
+      label: `${label} ${money(value)}`,
       data: labels.map(() => value),
       borderColor: color,
       borderWidth: 1,
@@ -443,7 +484,7 @@ function drawChart(p) {
       plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
       scales: {
         x: { ticks: { maxTicksLimit: 8, font: { size: 10 } }, grid: { display: false } },
-        y: { ticks: { font: { size: 10 }, callback: (v) => won(v) } },
+        y: { ticks: { font: { size: 10 }, callback: (v) => money(v) } },
       },
     },
   });
@@ -478,29 +519,43 @@ function wireControls() {
 }
 
 async function reload() {
+  if (!state.snapshot) return;   // 이 시장은 아직 분석하지 않았다
   const q = $("search").value.trim();
   const sort = $("sort").value;
-  const params = new URLSearchParams({ sort });
+  const params = new URLSearchParams({ market: state.market, sort });
   if (q) params.set("q", q);
   state.rows = await getJSON(`/api/securities?${params}`);
   renderHitCount();
   renderList();
 }
 
-async function init() {
-  loadPrefs();
+// 시장을 바꿀 때마다 부른다. 스냅샷이 없으면 페이지를 지우지 않는다 -
+// 탭은 남아 있어야 다른 시장으로 돌아갈 수 있다.
+async function loadMarket() {
+  renderMarketTabs();
+  state.selected = null;
+  state.rows = [];
+  $("detail-panel").innerHTML = `<p class="placeholder">왼쪽에서 종목을 선택하세요.</p>`;
   try {
-    state.snapshot = await getJSON("/api/snapshot");
+    state.snapshot = await getJSON(`/api/snapshot?market=${state.market}`);
   } catch (err) {
-    document.body.innerHTML =
-      `<p style="padding:40px;text-align:center;color:#718096">${err.message}</p>`;
+    state.snapshot = null;
+    $("snapshot-info").textContent = err.message;
+    $("hit-count").textContent = "";
+    $("chips").innerHTML = "";
+    $("stock-list").innerHTML = "";
     return;
   }
   renderSnapshotInfo();
   renderScoreBlock();
   renderChips();
-  wireControls();
   await reload();
+}
+
+async function init() {
+  loadPrefs();
+  wireControls();
+  await loadMarket();
 }
 
 init();

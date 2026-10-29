@@ -106,14 +106,39 @@ class Config(BaseModel):
     universe: UniverseConfig = UniverseConfig()
     lookback: LookbackConfig = LookbackConfig()
     hard_filters: HardFilterConfig = HardFilterConfig()
+    # 시장별로 hard_filters의 일부 필드만 덮어쓴다 (설계서 §18.4).
+    # 예: 미국은 자사주 매입으로 자본이 작은 대형주가 많아 부채비율이
+    # 무의미하다 - {"US": {"max_debt_ratio": .inf}}.
+    hard_filters_by_market: dict[str, dict] = {}
     scoring: dict[str, dict[str, MetricConfig]] = {}
     signal: SignalConfig = SignalConfig()
     sources: SourcesConfig = SourcesConfig()
 
+    def hard_filters_for(self, market: str) -> HardFilterConfig:
+        """그 시장에 적용할 하드필터. 덮어쓴 결과도 같은 검증을 거친다.
+
+        모르는 필드는 거부한다. 오타(max_dept_ratio)가 조용히 무시되면
+        끄려던 필터가 켜진 채로 남고, 아무도 그것을 알 수 없다.
+        """
+        override = self.hard_filters_by_market.get(market) or {}
+        unknown = set(override) - set(HardFilterConfig.model_fields)
+        if unknown:
+            raise ValueError(
+                f"hard_filters_by_market.{market}에 모르는 필드가 있습니다: "
+                f"{sorted(unknown)}"
+            )
+        return HardFilterConfig.model_validate(
+            {**self.hard_filters.model_dump(), **override})
+
 
 class Secrets(BaseModel):
-    dart_api_key: str
-    sec_user_agent: str = "stockscout/0.1"
+    """시장마다 필요한 비밀값이 다르다. 그 시장에 필요 없는 값은 None일 수 있다."""
+
+    dart_api_key: str | None = None
+    sec_user_agent: str | None = None
+
+
+SECRETS_MARKETS = ("KR", "US")
 
 
 def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> Config:
@@ -125,8 +150,15 @@ def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> Config:
     return Config.model_validate(raw)
 
 
-def load_secrets(path: Path | str = DEFAULT_ENV_PATH) -> Secrets:
-    """.env와 프로세스 환경변수를 합쳐 비밀값을 읽는다. 환경변수가 우선한다."""
+def load_secrets(path: Path | str = DEFAULT_ENV_PATH, market: str = "KR") -> Secrets:
+    """.env와 프로세스 환경변수를 합쳐 비밀값을 읽는다. 환경변수가 우선한다.
+
+    market에 필요한 값만 요구한다. 미국만 수집하는데 DART 키가 없다고
+    죽으면 안 되고, 한국만 수집하는데 SEC 연락처를 요구할 이유도 없다.
+    """
+    if market not in SECRETS_MARKETS:
+        raise ValueError(f"알 수 없는 시장입니다: {market} (가능: {SECRETS_MARKETS})")
+
     path = Path(path)
     values: dict[str, str | None] = {}
     if path.exists():
@@ -135,13 +167,24 @@ def load_secrets(path: Path | str = DEFAULT_ENV_PATH) -> Secrets:
         if os.environ.get(key):
             values[key] = os.environ[key]
 
-    if not values.get("DART_API_KEY"):
+    if market == "KR" and not values.get("DART_API_KEY"):
         raise ValueError(
             f"DART_API_KEY가 없습니다. {path}에 넣거나 환경변수로 설정하세요. "
             "키 발급: https://opendart.fss.or.kr"
         )
 
+    user_agent = values.get("SEC_USER_AGENT") or None
+    # SEC는 연락처 없는 User-Agent를 403으로 막는다(설계서 §18.2, 실측).
+    # 이메일 형식까지 검사하지 않는다 - '@' 하나가 "연락처를 넣었는가"를
+    # 가르기에 충분하고, 그 이상은 SEC가 판단한다.
+    if market == "US" and (not user_agent or "@" not in user_agent):
+        raise ValueError(
+            f"SEC_USER_AGENT에 연락처(이메일)가 없습니다. {path}에 "
+            "'SEC_USER_AGENT=stockscout you@example.com' 형식으로 넣으세요. "
+            "SEC는 연락처 없는 요청을 403으로 거부합니다."
+        )
+
     return Secrets(
-        dart_api_key=values["DART_API_KEY"],
-        sec_user_agent=values.get("SEC_USER_AGENT") or "stockscout/0.1",
+        dart_api_key=values.get("DART_API_KEY") or None,
+        sec_user_agent=user_agent,
     )

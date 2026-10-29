@@ -260,3 +260,102 @@ def test_hard_filter_year_counts_are_rejected_through_yaml(tmp_path):
 
     with pytest.raises(ValidationError):
         load_config(path)
+
+
+# --- 시장별 비밀값 (계획 E) -------------------------------------------
+
+
+def test_us_does_not_require_a_dart_key(tmp_path, monkeypatch):
+    """미국만 수집하는데 DART 키가 없다고 죽으면 안 된다."""
+    monkeypatch.delenv("DART_API_KEY", raising=False)
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("SEC_USER_AGENT=stockscout me@example.com\n", encoding="utf-8")
+
+    secrets = load_secrets(env, market="US")
+
+    assert secrets.sec_user_agent == "stockscout me@example.com"
+    assert secrets.dart_api_key is None
+
+
+def test_us_requires_a_contact_in_the_user_agent(tmp_path, monkeypatch):
+    """SEC는 연락처 없는 User-Agent를 403으로 막는다 (설계서 §18.2)."""
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("SEC_USER_AGENT=stockscout/0.1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="SEC_USER_AGENT"):
+        load_secrets(env, market="US")
+
+
+def test_us_requires_a_user_agent_at_all(tmp_path, monkeypatch):
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("DART_API_KEY=abc\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="SEC_USER_AGENT"):
+        load_secrets(env, market="US")
+
+
+def test_kr_is_still_the_default_market(tmp_path, monkeypatch):
+    """기존 호출(load_secrets(env))은 지금처럼 DART 키를 요구한다."""
+    monkeypatch.delenv("DART_API_KEY", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("SEC_USER_AGENT=stockscout me@example.com\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="DART_API_KEY"):
+        load_secrets(env)
+
+
+def test_unknown_market_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="XX"):
+        load_secrets(tmp_path / ".env", market="XX")
+
+
+# --- 시장별 하드필터 (계획 E 후속) ------------------------------------
+
+
+def test_market_hard_filters_override_only_the_given_fields():
+    from stockscout.config import Config
+
+    config = Config.model_validate({
+        "hard_filters": {"max_debt_ratio": 200, "min_history_years": 5},
+        "hard_filters_by_market": {"US": {"max_debt_ratio": 400}},
+    })
+
+    us = config.hard_filters_for("US")
+    assert us.max_debt_ratio == 400
+    assert us.min_history_years == 5
+    assert config.hard_filters_for("KR") == config.hard_filters
+
+
+def test_a_market_override_is_validated_like_the_base():
+    """덮어쓴 결과도 HardFilterConfig의 검증(ge=1 등)을 거친다."""
+    from stockscout.config import Config
+
+    config = Config.model_validate({
+        "hard_filters_by_market": {"US": {"interest_coverage_years": 0}}})
+
+    with pytest.raises(ValidationError):
+        config.hard_filters_for("US")
+
+
+def test_an_unknown_override_field_is_rejected():
+    """오타(max_dept_ratio)가 조용히 무시되면 필터가 그대로 켜져 있다."""
+    from stockscout.config import Config
+
+    config = Config.model_validate({
+        "hard_filters_by_market": {"US": {"max_dept_ratio": 400}}})
+
+    with pytest.raises(ValueError, match="max_dept_ratio"):
+        config.hard_filters_for("US")
+
+
+def test_real_settings_turn_off_the_debt_filter_for_us_only():
+    """설계서 §18.4: 자사주 매입으로 자본이 작은 미국 대형주는 부채비율이 무의미하다."""
+    import math
+
+    config = load_config()
+
+    assert math.isinf(config.hard_filters_for("US").max_debt_ratio)
+    assert config.hard_filters_for("KR").max_debt_ratio == 200

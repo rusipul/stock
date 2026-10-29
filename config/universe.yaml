@@ -64,3 +64,101 @@ KR:
     - "032830"  # 삼성생명
     - "000810"  # 삼성화재
     - "024110"  # 기업은행
+
+US:
+  exchange: US
+  currency: USD
+  # 티커는 SEC·Yahoo 표기 그대로다 (BRK-B처럼 하이픈). pykrx가 미국 종목을
+  # 모르므로 이름은 여기 적는다. is_financial은 은행·증권·보험 지주다.
+  tickers:
+    - AAPL
+    - MSFT
+    - NVDA
+    - GOOGL
+    - META
+    - AMZN
+    - INTC
+    - CSCO
+    - ORCL
+    - ADBE
+    - JNJ
+    - PFE
+    - MRK
+    - UNH
+    - ABT
+    - KO
+    - PEP
+    - PG
+    - WMT
+    - MCD
+    - NKE
+    - HD
+    - SBUX
+    - TGT
+    - EL
+    - CAT
+    - BA
+    - MMM
+    - UPS
+    - HON
+    - GE
+    - XOM
+    - CVX
+    - VZ
+    - T
+    - DIS
+    - JPM
+    - BAC
+    - GS
+    - BRK-B
+  names:
+    AAPL: Apple
+    MSFT: Microsoft
+    NVDA: NVIDIA
+    GOOGL: Alphabet
+    META: Meta Platforms
+    AMZN: Amazon
+    INTC: Intel
+    CSCO: Cisco
+    ORCL: Oracle
+    ADBE: Adobe
+    JNJ: Johnson & Johnson
+    PFE: Pfizer
+    MRK: Merck
+    UNH: UnitedHealth
+    ABT: Abbott
+    KO: Coca-Cola
+    PEP: PepsiCo
+    PG: Procter & Gamble
+    WMT: Walmart
+    MCD: McDonald's
+    NKE: Nike
+    HD: Home Depot
+    SBUX: Starbucks
+    TGT: Target
+    EL: Estee Lauder
+    CAT: Caterpillar
+    BA: Boeing
+    MMM: 3M
+    UPS: UPS
+    HON: Honeywell
+    GE: GE Aerospace
+    XOM: Exxon Mobil
+    CVX: Chevron
+    VZ: Verizon
+    T: AT&T
+    DIS: Disney
+    JPM: JPMorgan Chase
+    BAC: Bank of America
+    GS: Goldman Sachs
+    BRK-B: Berkshire Hathaway
+  is_financial:
+    - JPM
+    - BAC
+    - GS
+    - BRK-B
+  # SEC 티커 목록의 CIK 대신 쓸 CIK. XOM은 목록이 2026년 신설 지주사
+  # (ExxonMobil Holdings Corp, 2115436)를 가리키는데 아직 10-K가 없다.
+  # 옛 Exxon Mobil Corporation의 재무는 34088에 있다 (설계서 §18.4).
+  cik:
+    XOM: 34088

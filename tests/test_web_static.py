@@ -363,3 +363,56 @@ def test_hit_count_reports_both_grades():
     body = _function_body(js_text(), "renderHitCount")
 
     assert "STRONG" in body and "WATCH" in body
+
+
+# --- 계획 E: 시장 탭 --------------------------------------------------
+
+
+def test_index_has_market_tabs():
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="market-tabs"' in html
+
+
+def test_every_api_list_call_carries_the_market():
+    js = js_text()
+
+    assert "market: state.market" in _function_body(js, "reload")
+    assert "/api/snapshot?market=" in _function_body(js, "loadMarket")
+
+
+def test_money_shows_dollars_with_cents_for_us():
+    """원화 formatter로 달러를 찍으면 $230.55가 231이 된다."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node 가 없어 금액 형식 실행 검사를 건너뛴다")
+
+    script = (
+        'const state = { market: "US" };\n'
+        f"{_function_body(js_text(), 'money')}\n"
+        "console.log(money(230.55)); state.market = 'KR'; console.log(money(60000));"
+    )
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True)
+
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.split() == ["$230.55", "60,000"]
+
+
+def test_no_amount_is_formatted_as_won_directly():
+    """금액은 전부 money()를 거친다. 원화 전용 formatter가 남아 있으면 미국 화면이 원화로 찍힌다."""
+    assert "won(" not in js_text()
+
+
+def test_a_market_without_a_snapshot_does_not_wipe_the_page():
+    """미국을 아직 분석하지 않았으면 탭은 남기고 무엇을 실행할지 말한다."""
+    body = _function_body(js_text(), "loadMarket")
+
+    assert "document.body.innerHTML" not in body
+    assert "catch" in body
+
+
+def test_the_chosen_market_survives_a_reload():
+    js = js_text()
+
+    assert "stockscout.market" in _function_body(js, "loadPrefs")
+    assert "stockscout.market" in _function_body(js, "savePrefs")

@@ -270,10 +270,11 @@ class Repository:
         """
         try:
             cur = self.conn.execute(
-                "INSERT INTO snapshots (run_at, as_of, config_hash, config_json, note) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO snapshots "
+                "(run_at, as_of, config_hash, config_json, note, market) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (snapshot.run_at, snapshot.as_of, snapshot.config_hash,
-                 snapshot.config_json, snapshot.note),
+                 snapshot.config_json, snapshot.note, snapshot.market),
             )
             snapshot_id = cur.lastrowid
 
@@ -314,17 +315,30 @@ class Repository:
             r.signal_grade, r.signal_reason,
         )
 
-    def get_latest_snapshot(self) -> Snapshot | None:
-        row = self.conn.execute(
-            "SELECT * FROM snapshots ORDER BY snapshot_id DESC LIMIT 1"
-        ).fetchone()
+    def get_latest_snapshot(self, market: str | None = None) -> Snapshot | None:
+        """가장 최근 스냅샷. market을 넘기면 그 시장의 것만 본다.
+
+        화면과 API는 항상 market을 넘긴다 - 미국을 나중에 분석했다고
+        한국 화면이 미국 결과를 보여주면 안 된다. market을 생략하면 전
+        시장에서 가장 최근 것이다 (latest_price_date_any와 같은 규칙).
+        """
+        if market:
+            row = self.conn.execute(
+                "SELECT * FROM snapshots WHERE market = ? "
+                "ORDER BY snapshot_id DESC LIMIT 1",
+                (market,),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT * FROM snapshots ORDER BY snapshot_id DESC LIMIT 1"
+            ).fetchone()
         if not row:
             return None
         return Snapshot(
             snapshot_id=row["snapshot_id"], run_at=row["run_at"],
             as_of=row["as_of"],
             config_hash=row["config_hash"], config_json=row["config_json"],
-            note=row["note"],
+            note=row["note"], market=row["market"],
         )
 
     def get_analysis_results(self, snapshot_id: int) -> list[dict]:

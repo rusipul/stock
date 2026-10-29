@@ -41,7 +41,7 @@ def repo():
 
 @pytest.fixture
 def rows(repo):
-    snap = repo.get_latest_snapshot()
+    snap = repo.get_latest_snapshot(market="KR")
     if snap is None:
         pytest.skip("스냅샷이 없다")
     return repo.get_analysis_results(snap.snapshot_id)
@@ -146,7 +146,7 @@ def test_lg_chem_gets_no_grade_despite_the_largest_drop(rows):
 
 
 def test_snapshot_config_json_is_valid_json(repo):
-    snap = repo.get_latest_snapshot()
+    snap = repo.get_latest_snapshot(market="KR")
     if snap is None:
         pytest.skip("스냅샷이 없다")
 

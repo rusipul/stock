@@ -167,3 +167,27 @@ def test_init_db_adds_plan_c_columns_to_pre_existing_financials_table(tmp_path):
     assert len(rows) == 1                     # 마이그레이션이 데이터를 날리지 않았다
     assert rows[0]["revenue"] == 300.0        # 기존 값도 그대로다
     assert rows[0]["proxy_fields"] is None    # 옛 행은 값이 없을 뿐이다
+
+
+def test_init_db_adds_snapshot_market_to_an_old_database(tmp_path):
+    """계획 E 이전 DB의 스냅샷은 전부 한국 것이다. KR로 채워져야 한다."""
+    import sqlite3
+
+    from stockscout.store.db import init_db
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE snapshots (snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "run_at TEXT NOT NULL, config_hash TEXT NOT NULL, "
+        "config_json TEXT NOT NULL, note TEXT, as_of TEXT)"
+    )
+    conn.execute("INSERT INTO snapshots (run_at, config_hash, config_json) "
+                 "VALUES ('2026-09-11', 'h', '{}')")
+    conn.commit()
+
+    init_db(conn)
+
+    (market,) = conn.execute("SELECT market FROM snapshots").fetchone()
+    assert market == "KR"
+    conn.close()
