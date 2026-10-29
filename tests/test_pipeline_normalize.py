@@ -355,3 +355,23 @@ def test_normalize_merges_shares_and_audit_together(repo):
     (fin,) = repo.get_financials("005930.KS")
     assert fin.shares_outstanding == 5_969_782_550.0
     assert fin.audit_opinion == "적정의견"
+
+
+def test_us_market_is_normalized_from_edgar(repo):
+    from stockscout.models import RawStatement, Security
+    from stockscout.pipeline.normalize import normalize_market
+
+    repo.upsert_security(Security(ticker="AAPL", market="US", name="Apple",
+                                  currency="USD"))
+    repo.save_raw_statements([RawStatement(
+        ticker="AAPL", fiscal_year=2025, source="edgar",
+        payload={"period_end": "2025-09-27", "facts": {
+            "Revenues": 400.0, "OperatingIncomeLoss": 100.0,
+            "Liabilities": 300.0, "StockholdersEquity": 200.0}})])
+
+    summary = normalize_market(repo, market="US")
+
+    (fin,) = repo.get_financials("AAPL")
+    assert summary.normalized == 1
+    assert fin.revenue == 400.0
+    assert fin.currency == "USD"
