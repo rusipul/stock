@@ -46,11 +46,9 @@ def test_financials_are_excluded(rows):
 def test_the_mapping_leaves_most_non_financials_measurable(rows):
     """매핑이 크게 비면 대부분이 DATA_INSUFFICIENT로 떨어진다.
 
-    "채점됐는가"로 재지 않는다. 실측에서 채점을 가장 많이 막은 것은
-    매핑이 아니라 부채비율 하드필터였다(HIGH_DEBT만으로 15종목 - 자사주
-    매입으로 자본이 작은 미국 대형주). 그것은 매핑 문제가 아니라 기준의
-    문제라 이 테스트가 볼 일이 아니다. 실측 결측은 영업이익 줄이 없는
-    손익계산서(JNJ·MRK·PFE·CVX·GE·NKE)와 CIK가 바뀐 XOM이다 (§18.4).
+    "채점됐는가"로 재지 않는다. 채점은 하드필터(자본잠식·이자 미충당 등)도
+    막는데 그것은 매핑이 아니라 기준의 문제다. 영업이익 줄이 없는
+    회사(JNJ·MRK·PFE·CVX·GE·NKE·XOM)는 세전이익 대체값으로 측정된다 (§18.4).
     """
     others = [r for r in rows if r["ticker"] not in FINANCIALS]
     insufficient = [r["ticker"] for r in others
@@ -80,3 +78,8 @@ def test_the_kr_snapshot_is_still_the_kr_default():
         kr = Repository(conn).get_latest_snapshot(market="KR")
 
     assert kr is not None and kr.market == "KR"
+
+
+def test_us_hard_filters_do_not_exclude_for_debt(rows):
+    """미국은 부채비율 하드필터를 끈다 (settings.yaml hard_filters_by_market)."""
+    assert not any("HIGH_DEBT" in json.loads(r["filter_failures"]) for r in rows)

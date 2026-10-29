@@ -982,11 +982,25 @@ python -m stockscout run                        # universe → collect → analy
 | `capex` | 194 | 1 | NVDA 2021 |
 | `shares_outstanding` | 200 | 0 | 금융 5건. META·NKE·EL·UPS는 대체값(아래) |
 
-XOM은 0건이다. SEC 티커 목록의 XOM이 2026년 신설 지주사
+XOM은 처음에 0건이었다. SEC 티커 목록의 XOM이 2026년 신설 지주사
 (ExxonMobil Holdings Corp, CIK 2115436)로 바뀌어 아직 10-K가 없다. 옛
-Exxon Mobil Corp의 재무는 옛 CIK에 있다. 연간 값이 하나도 없으면
+Exxon Mobil Corporation의 재무는 CIK 34088에 있다. 연간 값이 하나도 없으면
 `EdgarSource`가 `PermanentSourceError`로 남긴다 - 전에는 빈 목록을 조용히
-돌려줘 `collect_errors`에 흔적이 없었다. CIK 수동 지정은 계획 F의 과제다.
+돌려줘 `collect_errors`에 흔적이 없었다.
+
+**사용자 결정 (2026-10-29)** - 아래 세 가지를 반영했다.
+1. **CIK 수동 지정.** `universe.yaml`의 `US.cik: {XOM: 34088}`을 SEC 티커
+   목록보다 먼저 본다
+2. **영업이익 대체값 = 세전이익.** 영업이익 태그가 없을 때만
+   `IncomeLossFromContinuingOperationsBeforeIncomeTaxes`의 회사 전체 태그
+   (`...ExtraordinaryItemsNoncontrollingInterest`, CVX는
+   `...MinorityInterestAndIncomeLossFromEquityMethodInvestments`)를 쓴다.
+   영업외손익이 섞인 근사값이라 `proxy_fields`에 남고 화면 근거가 밝힌다.
+   대상: JNJ·MRK·PFE·CVX·GE·NKE·XOM 전 연도, HON 2021
+3. **미국은 부채비율 하드필터를 끈다.** `settings.yaml`의
+   `hard_filters_by_market.US.max_debt_ratio: .inf`. 시장별 덮어쓰기는
+   `Config.hard_filters_for(market)`가 합쳐 `pipeline/analyze`가 쓴다 -
+   `analysis/`는 그대로다. 점수의 안정성 축 부채비율 지표는 남는다
 
 매핑에 더한 태그:
 - `InterestAndDebtExpense` → 이자비용 (BA·HON). 이자비용과 같은 개념이다
@@ -998,10 +1012,8 @@ Exxon Mobil Corp의 재무는 옛 CIK에 있다. 연간 값이 하나도 없으�
   근거가 밝힌다(§17.3과 같은 방식)
 
 일부러 넣지 않은 것:
-- 영업이익 자리의 세전이익(`IncomeLossFromContinuingOperationsBeforeIncomeTaxes...`).
-  영업외손익이 섞인 다른 지표다. 6종목은 `DATA_INSUFFICIENT`로 제외되는
-  것이 맞는 동작이다(§7.3). 대체값을 둘지는 사용자가 정할 일이다
 - 이자비용 자리의 `InterestPaidNet`. 현금 지급액이라 발생액과 다르다
+- 세전이익의 국내분·해외분(`...Domestic`·`...Foreign`). 회사 전체가 아니다
 
 실데이터가 찾은 추출 결함:
 - **결산일 납치.** PG(6월 결산)의 10-K 주석에 2023-10-01 ~ 2024-09-30
@@ -1009,12 +1021,16 @@ Exxon Mobil Corp의 재무는 옛 CIK에 있다. 연간 값이 하나도 없으�
   둘이면 늦은 쪽" 규칙이 그 한 항목에 2024년 결산일을 넘겨 그해 값이 전부
   빠졌다. 이제 그날짜로 끝나는 연간 태그가 가장 많은 날이 결산일이다
 
-**분석 결과 (스냅샷 #10).** 통과 11 · 제외 29. 측정 불가 축 0.
-점수 63.7~98. ★★ 1종목(ADBE: 80점, 5년 평균 대비 -40.5%).
-제외의 최대 원인은 매핑이 아니라 **부채비율 200% 하드필터**다 -
-`HIGH_DEBT` 하나만으로 15종목(AAPL·KO·PEP·HD·UNH 등). 자사주 매입으로
-자본이 작은 미국 대형주의 구조다. 시장별 기준을 둘지는 사용자가 정할 일이다
-(§8.1의 기준은 한국에서 정했다)
+**분석 결과.** 결정 전(스냅샷 #10): 통과 11 · 제외 29. 제외의 최대 원인은
+매핑이 아니라 **부채비율 200% 하드필터**였다 - `HIGH_DEBT` 하나만으로
+15종목(AAPL·KO·PEP·HD·UNH 등), 자사주 매입으로 자본이 작은 미국 대형주의
+구조다. 영업이익 결측 7종목은 `DATA_INSUFFICIENT`였다.
+
+결정 반영 후(스냅샷 #12, 기준일 2026-10-28): 40종목 · 210개 연도, 필수항목
+결측 5건(전부 금융). **통과 33 · 제외 7**(금융 4, `CAPITAL_IMPAIRED` MCD·SBUX,
+`INTEREST_UNCOVERED` INTC). 측정 불가 축 0. 점수 23.1~98.
+★★ ADBE(80점, 5년 평균 대비 -40.1%, 고점 대비 -63.7%),
+★ ORCL(74점, 고점 대비 -55.3%). NKE는 평균 대비 -56%지만 46.9점이라 등급 없음
 
 ### 18.5 시장별 스냅샷
 
