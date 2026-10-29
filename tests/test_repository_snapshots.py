@@ -482,3 +482,29 @@ def test_snapshot_market_defaults_to_kr():
     snap = Snapshot(run_at="x", config_hash="h", config_json="{}")
 
     assert snap.market == "KR"
+
+
+# --- 기간별 통계 (비교 기간 슬라이더) ------------------------------------
+
+
+def test_window_stats_are_saved_for_every_window(repo):
+    stats = PriceStats(
+        price_current=100.0,
+        avg_price={1: 110.0, 2: 125.0, 5: None},
+        high_5y=200.0,
+        drop_vs_avg={1: 100 / 110 - 1, 2: 100 / 125 - 1, 5: None},
+        drop_vs_high=-0.5,
+        high_by_window={1: 120.0, 2: 160.0, 5: 200.0},
+        drop_vs_high_by_window={1: 100 / 120 - 1, 2: 100 / 160 - 1, 5: -0.5},
+    )
+    sid = repo.save_snapshot(snap(), [AnalysisResult(
+        ticker="005930.KS", filters=FilterOutcome(failures=[]), stats=stats,
+        valuation=Valuation())])
+
+    (row,) = repo.get_analysis_results(sid)
+    windows = json.loads(row["window_stats"])
+
+    assert set(windows) == {"1", "2", "5"}
+    assert windows["2"] == {"avg_price": 125.0, "drop_vs_avg": 100 / 125 - 1,
+                            "high": 160.0, "drop_vs_high": 100 / 160 - 1}
+    assert windows["5"]["avg_price"] is None      # 커버리지 미달은 None 그대로

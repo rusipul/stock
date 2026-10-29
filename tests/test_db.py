@@ -191,3 +191,21 @@ def test_init_db_adds_snapshot_market_to_an_old_database(tmp_path):
     (market,) = conn.execute("SELECT market FROM snapshots").fetchone()
     assert market == "KR"
     conn.close()
+
+
+def test_init_db_adds_window_stats_to_an_old_database(tmp_path):
+    """기간별 통계 이전의 결과 행은 window_stats가 NULL이다. API가 컬럼으로 메운다."""
+    import sqlite3
+
+    from stockscout.store.db import init_db
+
+    conn = sqlite3.connect(tmp_path / "old.db")
+    conn.execute("CREATE TABLE analysis_results (snapshot_id INTEGER, ticker TEXT)")
+    conn.execute("INSERT INTO analysis_results VALUES (1, 'A')")
+    conn.commit()
+
+    init_db(conn)
+
+    (value,) = conn.execute("SELECT window_stats FROM analysis_results").fetchone()
+    assert value is None
+    conn.close()

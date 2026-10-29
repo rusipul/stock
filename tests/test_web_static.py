@@ -301,9 +301,10 @@ def _run_grade_cases(cases):
     if node is None:
         pytest.skip("node 가 없어 등급 판정 실행 검사를 건너뛴다")
 
-    source = _function_body(js_text(), "gradeOf")
+    source = (_function_body(js_text(), "windowDrops") + "\n"
+              + _function_body(js_text(), "gradeOf"))
     script = (
-        "const state = { minScore: 70, dropThreshold: -0.40,"
+        "const state = { minScore: 70, dropThreshold: -0.40, window: 5,"
         " snapshot: { has_scores: true } };\n"
         f"{source}\n"
         f"const cases = {_json.dumps(cases)};\n"
@@ -466,6 +467,8 @@ def test_static_filter_and_sort_follow_the_server_rules():
         '{"ticker":"C","name":"Charlie","drop_vs_avg_5y":-0.5}]'
     )
     script = (
+        "const state = { window: 5 };\n"
+        f"{_function_body(js_text(), 'windowDrops')}\n"
         f"{_function_body(js_text(), 'filterAndSort')}\n"
         f"const rows = {rows};\n"
         "const t = (q, s) => filterAndSort(rows, q, s).map(r => r.ticker).join('');\n"
@@ -491,3 +494,64 @@ def test_static_watchlist_lives_in_the_browser():
 
     assert "STATIC" in body
     assert "stockscout.watchlist" in js_text()
+
+
+# --- 비교 기간 슬라이더 (1~5년) -----------------------------------------
+
+
+def _grade_at(window, rows):
+    import json as _json
+
+    js = js_text()
+    script = (
+        f"const state = {{ minScore: 70, dropThreshold: -0.40, window: {window},"
+        " snapshot: { has_scores: true } };\n"
+        f"{_function_body(js, 'windowDrops')}\n{_function_body(js, 'gradeOf')}\n"
+        f"console.log(JSON.stringify({_json.dumps(rows)}.map(gradeOf)));"
+    )
+    return _json.loads(_run_node(script))
+
+
+def test_the_window_slider_changes_which_period_is_graded():
+    """5년으로는 별이 없지만 1년으로 보면 평균·고점 모두 -40% 아래인 종목."""
+    row = {
+        "passed_filters": True, "score_total": 80.0,
+        "drop_vs_avg_5y": 0.10, "drop_vs_high": -0.20,
+        "window_stats": {
+            "1": {"drop_vs_avg": -0.45, "drop_vs_high": -0.50},
+            "5": {"drop_vs_avg": 0.10, "drop_vs_high": -0.20},
+        },
+    }
+
+    assert _grade_at(5, [row]) == [None]
+    assert _grade_at(1, [row]) == ["STRONG"]
+
+
+def test_a_window_missing_from_an_old_snapshot_has_no_grade():
+    """옛 스냅샷에는 2년 통계가 없다. 5년 값으로 대신 판정하면 안 된다."""
+    row = {"passed_filters": True, "score_total": 80.0,
+           "drop_vs_avg_5y": -0.5, "drop_vs_high": -0.5, "window_stats": {}}
+
+    assert _grade_at(2, [row]) == [None]
+
+
+def test_index_has_the_window_slider():
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="window-years"' in html
+    assert 'min="1"' in html and 'max="5"' in html
+
+
+def test_the_window_survives_a_reload():
+    js = js_text()
+
+    assert "stockscout.window" in _function_body(js, "loadPrefs")
+    assert "stockscout.window" in _function_body(js, "savePrefs")
+
+
+def test_the_window_slider_regrades_without_a_server_round_trip():
+    body = _function_body(js_text(), "wireControls")
+    handler = body.split('$("window-years").oninput')[1].split("};")[0]
+
+    assert "getJSON" not in handler and "fetch" not in handler
+    assert "renderList" in handler

@@ -286,10 +286,10 @@ class Repository:
                     score_cashflow, score_detail,
                     price_current, avg_price_1y, avg_price_3y, avg_price_5y,
                     high_5y, drop_vs_avg_1y, drop_vs_avg_3y, drop_vs_avg_5y,
-                    drop_vs_high, market_cap, per, pbr,
+                    drop_vs_high, window_stats, market_cap, per, pbr,
                     signal_grade, signal_reason
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                          ?, ?, ?, ?, ?, ?)
+                          ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [self._result_row(snapshot_id, r) for r in results],
             )
@@ -310,7 +310,7 @@ class Repository:
             s.price_current, s.avg_price.get(1), s.avg_price.get(3),
             s.avg_price.get(5), s.high_5y,
             s.drop_vs_avg.get(1), s.drop_vs_avg.get(3), s.drop_vs_avg.get(5),
-            s.drop_vs_high,
+            s.drop_vs_high, json.dumps(_window_stats(s)),
             r.valuation.market_cap, r.valuation.per, r.valuation.pbr,
             r.signal_grade, r.signal_reason,
         )
@@ -468,3 +468,17 @@ class Repository:
             listed_at=row["listed_at"],
             in_universe=bool(row["in_universe"]),
         )
+
+
+def _window_stats(s) -> dict[str, dict]:
+    """창(년) -> 그 창의 평균·고점과 하락률. JSON 키는 문자열이다."""
+    years = sorted(set(s.avg_price) | set(s.high_by_window))
+    return {
+        str(y): {
+            "avg_price": s.avg_price.get(y),
+            "drop_vs_avg": s.drop_vs_avg.get(y),
+            "high": s.high_by_window.get(y),
+            "drop_vs_high": s.drop_vs_high_by_window.get(y),
+        }
+        for y in years
+    }

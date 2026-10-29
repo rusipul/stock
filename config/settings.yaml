@@ -5,7 +5,7 @@ universe:
   exclude_financials: true
 
 lookback:
-  price_years: [1, 3, 5]
+  price_years: [1, 2, 3, 4, 5]   # 화면의 비교 기간 슬라이더가 1년 단위로 쓴다
   primary_window: 5
   financial_years: 5
   min_data_coverage: 0.8

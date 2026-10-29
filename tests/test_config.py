@@ -182,7 +182,7 @@ def test_unsupported_price_window_is_rejected(tmp_path):
     """
     path = tmp_path / "settings.yaml"
     path.write_text(
-        "lookback:\n  price_years: [1, 2, 3, 5]\n  primary_window: 2\n",
+        "lookback:\n  price_years: [1, 3, 5, 6]\n  primary_window: 5\n",
         encoding="utf-8",
     )
 
@@ -193,7 +193,7 @@ def test_unsupported_price_window_is_rejected(tmp_path):
 def test_error_names_the_offending_window_and_the_allowed_set(tmp_path):
     path = tmp_path / "settings.yaml"
     path.write_text(
-        "lookback:\n  price_years: [1, 3, 4, 5]\n  primary_window: 5\n",
+        "lookback:\n  price_years: [1, 3, 5, 7]\n  primary_window: 5\n",
         encoding="utf-8",
     )
 
@@ -201,8 +201,30 @@ def test_error_names_the_offending_window_and_the_allowed_set(tmp_path):
         load_config(path)
 
     message = str(exc.value)
-    assert "[4]" in message
-    assert "[1, 3, 5]" in message
+    assert "[7]" in message
+    assert "[1, 2, 3, 4, 5]" in message
+
+
+def test_every_year_from_one_to_five_is_storable(tmp_path):
+    """화면의 비교 기간 슬라이더(1~5년)가 쓰는 창이다. window_stats에 담긴다."""
+    path = tmp_path / "settings.yaml"
+    path.write_text(
+        "lookback:\n  price_years: [1, 2, 3, 4, 5]\n  primary_window: 5\n",
+        encoding="utf-8")
+
+    assert load_config(path).lookback.price_years == [1, 2, 3, 4, 5]
+
+
+def test_primary_window_must_have_its_own_columns(tmp_path):
+    """2·4년은 JSON(window_stats)에만 있다. CLI 순위표와 판정 근거는
+    drop_vs_avg_{N}y 컬럼을 읽으므로 주 기간은 1·3·5년이어야 한다."""
+    path = tmp_path / "settings.yaml"
+    path.write_text(
+        "lookback:\n  price_years: [1, 2, 3, 4, 5]\n  primary_window: 2\n",
+        encoding="utf-8")
+
+    with pytest.raises(ValueError, match="primary_window"):
+        load_config(path)
 
 
 def test_subset_of_supported_windows_is_allowed(tmp_path):

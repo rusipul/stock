@@ -131,3 +131,35 @@ def test_kr_rationale_stays_whole_won(client):
     lines = client.get("/api/securities/005930.KS").json()["rationale"]
 
     assert any("60,000 / 60,000" in line for line in lines), lines
+
+
+# --- 기간별 통계 (비교 기간 슬라이더) ------------------------------------
+
+
+def test_rows_carry_stats_for_each_window(client):
+    (row,) = client.get("/api/securities").json()
+
+    assert set(row["window_stats"]) == {"1", "3", "5"}
+    assert row["window_stats"]["5"]["avg_price"] == 60000.0
+
+
+def test_detail_carries_window_stats_too(client):
+    body = client.get("/api/securities/AAPL").json()
+
+    assert body["window_stats"]["1"]["drop_vs_avg"] == 0.0
+
+
+def test_rows_saved_before_window_stats_fall_back_to_the_columns(db):
+    """옛 스냅샷의 window_stats는 NULL이다. 1·3·5년 컬럼과 5년 고점으로 메운다."""
+    import sqlite3
+
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE analysis_results SET window_stats = NULL")
+    conn.commit()
+    conn.close()
+
+    (row,) = TestClient(create_app(db_path=db)).get("/api/securities").json()
+
+    assert set(row["window_stats"]) == {"1", "3", "5"}
+    assert row["window_stats"]["5"]["high"] == 60000.0
+    assert row["window_stats"]["1"]["high"] is None

@@ -404,3 +404,48 @@ def test_treasury_larger_than_issued_falls_back_to_issued():
 
     assert val.market_cap == 50_000.0
     assert val.per == pytest.approx(50.0)
+
+
+# --- 기간별 고점 (화면의 비교 기간 슬라이더) ------------------------------
+
+
+def test_high_is_computed_for_every_window():
+    """2년 전의 고점은 1년 고점에 안 잡히고 2년 고점에는 잡힌다."""
+    as_of = date(2026, 1, 1)
+    series = [
+        PriceBar(ticker="X", date=date(2024, 6, 1), close=300.0),   # 1.5년 전 고점
+        PriceBar(ticker="X", date=date(2025, 6, 1), close=200.0),   # 0.5년 전
+        PriceBar(ticker="X", date=date(2026, 1, 1), close=150.0),   # 현재
+    ]
+    calendar = [b.date for b in series]
+
+    stats = compute_price_stats(series, as_of=as_of, windows=[1, 2],
+                                calendar=calendar, min_coverage=0.0)
+
+    assert stats.high_by_window == {1: 200.0, 2: 300.0}
+    assert stats.drop_vs_high_by_window[1] == pytest.approx(150 / 200 - 1)
+    assert stats.drop_vs_high_by_window[2] == pytest.approx(150 / 300 - 1)
+
+
+def test_window_highs_ignore_the_coverage_gate():
+    """평균과 달리 고점은 커버리지와 무관하다 (5년 고점과 같은 규칙)."""
+    as_of = date(2026, 1, 1)
+    series = [PriceBar(ticker="X", date=as_of, close=100.0)]
+    calendar = [as_of - timedelta(days=i) for i in range(300)]
+
+    stats = compute_price_stats(series, as_of=as_of, windows=[1],
+                                calendar=calendar, min_coverage=0.8)
+
+    assert stats.avg_price[1] is None
+    assert stats.high_by_window == {1: 100.0}
+
+
+def test_the_five_year_high_matches_its_window_entry():
+    as_of = date(2026, 1, 1)
+    series = [PriceBar(ticker="X", date=date(2022, 1, 1), close=500.0),
+              PriceBar(ticker="X", date=as_of, close=100.0)]
+
+    stats = compute_price_stats(series, as_of=as_of, windows=[5],
+                                calendar=[b.date for b in series], min_coverage=0.0)
+
+    assert stats.high_by_window[5] == stats.high_5y == 500.0

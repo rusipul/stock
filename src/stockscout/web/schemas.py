@@ -32,6 +32,15 @@ class SnapshotInfo(BaseModel):
     has_valuation: bool
 
 
+class WindowStat(BaseModel):
+    """한 비교 기간(년)의 평균·고점과 하락률. 화면의 비교 기간 슬라이더가 쓴다."""
+
+    avg_price: float | None = None
+    drop_vs_avg: float | None = None
+    high: float | None = None
+    drop_vs_high: float | None = None
+
+
 class SecurityRow(BaseModel):
     """좌측 목록 한 줄. 슬라이더 재판정에 필요한 지표를 모두 담는다.
 
@@ -57,6 +66,7 @@ class SecurityRow(BaseModel):
     drop_vs_avg_3y: float | None
     drop_vs_avg_5y: float | None
     drop_vs_high: float
+    window_stats: dict[int, WindowStat] = {}
 
     score_total: float | None
     market_cap: float | None

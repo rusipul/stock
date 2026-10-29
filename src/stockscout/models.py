@@ -219,6 +219,10 @@ class PriceStats(BaseModel):
     high_5y: float
     drop_vs_avg: dict[int, float | None]
     drop_vs_high: float
+    # 창(년) -> 그 창의 고점과 고점 대비 하락률. 화면의 비교 기간 슬라이더가
+    # 쓴다. high_5y·drop_vs_high는 등급 판정(§9.1의 5년 고점)이 그대로 쓴다.
+    high_by_window: dict[int, float] = {}
+    drop_vs_high_by_window: dict[int, float] = {}
 
 
 class Valuation(BaseModel):

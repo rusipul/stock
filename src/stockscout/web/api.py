@@ -154,6 +154,7 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                     drop_vs_avg_3y=r["drop_vs_avg_3y"],
                     drop_vs_avg_5y=r["drop_vs_avg_5y"],
                     drop_vs_high=r["drop_vs_high"],
+                    window_stats=_window_stats(r),
                     score_total=r["score_total"],
                     market_cap=r["market_cap"],
                     per=r["per"],
@@ -203,6 +204,7 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                 drop_vs_avg_3y=row["drop_vs_avg_3y"],
                 drop_vs_avg_5y=row["drop_vs_avg_5y"],
                 drop_vs_high=row["drop_vs_high"],
+                window_stats=_window_stats(row),
                 score_total=row["score_total"],
                 market_cap=row["market_cap"],
                 per=row["per"],
@@ -282,6 +284,27 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
+
+
+def _window_stats(row) -> dict[int, dict]:
+    """저장된 기간별 통계. 그 컬럼이 생기기 전 스냅샷은 1·3·5년 컬럼으로 메운다.
+
+    옛 행에는 1·3년 고점이 없다(5년 고점만 저장했다). 없는 값은 None으로
+    두고 화면이 "—"로 보인다 - 5년 고점으로 대신하면 다른 숫자가 된다.
+    """
+    # .get: 마이그레이션 전 DB(init_db를 거치지 않고 연 DB)에는 컬럼이 없다.
+    stored = row.get("window_stats")
+    if stored:
+        return {int(k): v for k, v in json.loads(stored).items()}
+    out = {}
+    for years in (1, 3, 5):
+        out[years] = {
+            "avg_price": row[f"avg_price_{years}y"],
+            "drop_vs_avg": row[f"drop_vs_avg_{years}y"],
+            "high": row["high_5y"] if years == 5 else None,
+            "drop_vs_high": row["drop_vs_high"] if years == 5 else None,
+        }
+    return out
 
 
 def _window_start(as_of: date, years: int) -> date:

@@ -67,9 +67,17 @@ def compute_price_stats(
 
     avg_price: dict[int, float | None] = {}
     drop_vs_avg: dict[int, float | None] = {}
+    high_by_window: dict[int, float] = {}
+    drop_vs_high_by_window: dict[int, float] = {}
 
     for years in windows:
         start = window_start(as_of, years)
+        # 고점은 커버리지 관문 밖이다 - 5년 고점과 같은 규칙(위 docstring).
+        in_window = [b.close for b in ordered if b.date >= start]
+        high = max(in_window or [price_current])
+        high_by_window[years] = high
+        drop_vs_high_by_window[years] = price_current / high - 1 if high > 0 else 0.0
+
         closes = [b.close for b in ordered if start <= b.date <= as_of]
         expected = sum(1 for d in calendar if start <= d <= as_of)
 
@@ -88,6 +96,8 @@ def compute_price_stats(
         high_5y=high_5y,
         drop_vs_avg=drop_vs_avg,
         drop_vs_high=price_current / high_5y - 1 if high_5y > 0 else 0.0,
+        high_by_window=high_by_window,
+        drop_vs_high_by_window=drop_vs_high_by_window,
     )
 
 

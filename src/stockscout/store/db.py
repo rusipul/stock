@@ -32,7 +32,19 @@ def init_db(conn: sqlite3.Connection) -> None:
     _add_snapshots_as_of_column_if_missing(conn)
     _add_financials_columns_if_missing(conn)
     _add_snapshots_market_column_if_missing(conn)
+    _add_window_stats_column_if_missing(conn)
     conn.commit()
+
+
+def _add_window_stats_column_if_missing(conn: sqlite3.Connection) -> None:
+    """비교 기간 슬라이더가 더한 컬럼을 기존 DB에 얹는다.
+
+    옛 결과 행은 NULL로 남는다. 다시 계산할 원본이 이 행에 없기 때문이다.
+    API는 NULL이면 1·3·5년 컬럼으로 메운다 (web/api.py의 _window_stats).
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(analysis_results)")}
+    if "window_stats" not in columns:
+        conn.execute("ALTER TABLE analysis_results ADD COLUMN window_stats TEXT")
 
 
 def _add_snapshots_market_column_if_missing(conn: sqlite3.Connection) -> None:

@@ -88,6 +88,8 @@ CREATE TABLE IF NOT EXISTS analysis_results (
   drop_vs_avg_3y  REAL,
   drop_vs_avg_5y  REAL,
   drop_vs_high    REAL,
+  window_stats    TEXT,   -- {"1": {avg_price, drop_vs_avg, high, drop_vs_high}, ...}
+                          -- 1~5년 전부. 화면의 비교 기간 슬라이더가 쓴다
   market_cap      REAL,
   per             REAL,
   pbr             REAL,

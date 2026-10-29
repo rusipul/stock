@@ -13,11 +13,14 @@ from pydantic import BaseModel, Field, model_validator
 DEFAULT_CONFIG_PATH = Path("config/settings.yaml")
 DEFAULT_ENV_PATH = Path("config/.env")
 
-# 저장 가능한 창은 스키마가 정한다. analysis_results에 avg_price_1y/3y/5y와
-# drop_vs_avg_1y/3y/5y 컬럼만 있으므로(설계서 §6), 다른 창을 설정하면
-# 계산은 되지만 저장 시 조용히 버려지고 출력 단계에서 KeyError로 죽는다.
-# 설정 로드 시점에 분명한 메시지로 막는다.
-SUPPORTED_PRICE_WINDOWS = (1, 3, 5)
+# 저장 가능한 창은 스키마가 정한다. 1~5년 전부 analysis_results.window_stats
+# (JSON)에 담기고, 1·3·5년은 따로 컬럼(avg_price_1y 등)도 있다(설계서 §6).
+# 범위 밖 창을 설정하면 계산은 되지만 저장 시 조용히 버려지므로 설정 로드
+# 시점에 분명한 메시지로 막는다.
+SUPPORTED_PRICE_WINDOWS = (1, 2, 3, 4, 5)
+# 주 기간은 컬럼이 있어야 한다. CLI 순위표와 판정 근거가 drop_vs_avg_{N}y를
+# 읽는다 - 2년을 주 기간으로 두면 그 자리에서 KeyError로 죽는다.
+COLUMN_PRICE_WINDOWS = (1, 3, 5)
 
 
 class UniverseConfig(BaseModel):
@@ -46,6 +49,11 @@ class LookbackConfig(BaseModel):
 
     @model_validator(mode="after")
     def primary_window_must_be_available(self) -> "LookbackConfig":
+        if self.primary_window not in COLUMN_PRICE_WINDOWS:
+            raise ValueError(
+                f"primary_window({self.primary_window})는 "
+                f"{list(COLUMN_PRICE_WINDOWS)} 중 하나여야 합니다"
+            )
         if self.primary_window not in self.price_years:
             raise ValueError(
                 f"primary_window({self.primary_window})가 "
