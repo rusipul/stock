@@ -8,6 +8,8 @@ const state = {
   chip: "all",
   dropThreshold: -0.40,
   minScore: 70,
+  window: 5,          // 비교 기간(년). 평균·고점 모두 이 기간으로 잰다
+  detail: null,       // 열려 있는 상세(기간을 바꾸면 다시 그린다)
   chart: null,
 };
 
@@ -47,6 +49,8 @@ function loadPrefs() {
     if (saved !== null) state.dropThreshold = parseFloat(saved);
     const minScore = localStorage.getItem("stockscout.minScore");
     if (minScore !== null) state.minScore = parseFloat(minScore);
+    const win = parseInt(localStorage.getItem("stockscout.window"), 10);
+    if (win >= 1 && win <= 5) state.window = win;
     const market = localStorage.getItem("stockscout.market");
     if (market === "KR" || market === "US") state.market = market;
   } catch (e) { /* 시크릿 모드 등에서 막힐 수 있다 */ }
@@ -56,6 +60,7 @@ function savePrefs() {
   try {
     localStorage.setItem("stockscout.dropThreshold", String(state.dropThreshold));
     localStorage.setItem("stockscout.minScore", String(state.minScore));
+    localStorage.setItem("stockscout.window", String(state.window));
     localStorage.setItem("stockscout.market", state.market);
   } catch (e) { /* 저장 실패는 기능을 막지 않는다 */ }
 }
@@ -71,10 +76,11 @@ function filterAndSort(rows, q, sort) {
     : rows.slice();
   const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
   if (sort === "drop") {
+    const drop = (r) => windowDrops(r).avg;
     out.sort((a, b) => {
-      const na = a.drop_vs_avg_5y === null, nb = b.drop_vs_avg_5y === null;
+      const na = drop(a) === null, nb = drop(b) === null;
       if (na !== nb) return na ? 1 : -1;
-      return (a.drop_vs_avg_5y || 0) - (b.drop_vs_avg_5y || 0);
+      return (drop(a) || 0) - (drop(b) || 0);
     });
   } else if (sort === "name") {
     out.sort((a, b) => cmp(a.name, b.name));
@@ -113,8 +119,25 @@ async function getJSON(url) {
 // 점수가 없는 동안 ★★/★ 등급은 매기지 않는다. 가격만으로 등급을
 // 매기면 품질을 검증한 것처럼 보이는 거짓말이 된다 (설계서 §9.3).
 
+// 선택한 비교 기간(state.window)의 평균·고점 대비 하락률.
+// window_stats가 없는 행(이 기능 이전 스냅샷)은 그 기간의 컬럼이 있으면
+// 쓰고, 없으면 null이다 - 5년 값으로 대신 판정하면 다른 기간의 등급이 된다.
+function windowDrops(row) {
+  const ws = row.window_stats && row.window_stats[state.window];
+  if (ws) {
+    return { avg: ws.drop_vs_avg ?? null, high: ws.drop_vs_high ?? null };
+  }
+  if (row.window_stats && Object.keys(row.window_stats).length) {
+    return { avg: null, high: null };
+  }
+  return {
+    avg: row[`drop_vs_avg_${state.window}y`] ?? null,
+    high: state.window === 5 ? (row.drop_vs_high ?? null) : null,
+  };
+}
+
 function hits(row) {
-  const d = row.drop_vs_avg_5y;
+  const d = windowDrops(row).avg;
   return d !== null && d <= state.dropThreshold;
 }
 
@@ -125,9 +148,9 @@ function gradeOf(row) {
   if (!state.snapshot.has_scores) return null;
   if (!row.passed_filters || row.score_total === null) return null;
   if (row.score_total < state.minScore) return null;
-  const avg = row.drop_vs_avg_5y;
+  const { avg, high } = windowDrops(row);
   const avgHit = avg !== null && avg <= state.dropThreshold;
-  const highHit = row.drop_vs_high !== null && row.drop_vs_high <= state.dropThreshold;
+  const highHit = high !== null && high <= state.dropThreshold;
   if (avgHit && highHit) return "STRONG";
   if (avgHit || highHit) return "WATCH";
   return null;
@@ -218,12 +241,12 @@ function renderHitCount() {
     const strong = passing.filter((r) => gradeOf(r) === "STRONG").length;
     const single = passing.filter((r) => gradeOf(r) === "WATCH").length;
     $("hit-count").textContent =
-      `현재 기준 -> ★★ ${strong}종목 · ★ ${single}종목 / 통과 ${passing.length}종목`;
+      `${state.window}년 기준 -> ★★ ${strong}종목 · ★ ${single}종목 / 통과 ${passing.length}종목`;
     return;
   }
   const n = passing.filter(hits).length;
   $("hit-count").textContent =
-    `현재 기준 -> ${n}종목 해당 / 통과 ${passing.length}종목`;
+    `${state.window}년 기준 -> ${n}종목 해당 / 통과 ${passing.length}종목`;
 }
 
 function renderList() {
@@ -253,8 +276,9 @@ function renderList() {
     }
 
     const dp = document.createElement("span");
-    dp.className = "dp " + signClass(row.drop_vs_avg_5y);
-    dp.textContent = pct(row.drop_vs_avg_5y);
+    const drop = windowDrops(row).avg;
+    dp.className = "dp " + signClass(drop);
+    dp.textContent = pct(drop);
 
     li.append(star, nm, dp);
     ul.appendChild(li);
@@ -320,6 +344,8 @@ async function selectTicker(ticker) {
 }
 
 function renderDetail(d, prices) {
+  state.detail = { d, prices };
+  const drops = windowDrops(d);
   const panel = $("detail-panel");
   panel.innerHTML = "";
 
@@ -352,8 +378,8 @@ function renderDetail(d, prices) {
   kpis.className = "kpis";
   kpis.innerHTML = [
     kpi(money(d.price_current), "현재가"),
-    kpi(pct(d.drop_vs_avg_5y), "5년평균 대비", signClass(d.drop_vs_avg_5y)),
-    kpi(pct(d.drop_vs_high), "5년고점 대비", signClass(d.drop_vs_high)),
+    kpi(pct(drops.avg), `${state.window}년평균 대비`, signClass(drops.avg)),
+    kpi(pct(drops.high), `${state.window}년고점 대비`, signClass(drops.high)),
     d.score_total === null
       ? kpi("—", "우량주 점수", "", true)
       : kpi(d.score_total.toFixed(0), "우량주 점수"),
@@ -573,6 +599,21 @@ function wireControls() {
     renderList();
   };
 
+  const win = $("window-years");
+  win.value = String(state.window);
+  $("window-value").textContent = `${state.window}년`;
+  $("window-years").oninput = () => {
+    state.window = Number(win.value);
+    $("window-value").textContent = `${state.window}년`;
+    savePrefs();
+    state.rows = filterAndSort(state.rows, $("search").value.trim(), $("sort").value);
+    renderHitCount();
+    renderList();
+    if (state.detail && state.selected === state.detail.d.ticker) {
+      renderDetail(state.detail.d, state.detail.prices);
+    }
+  };
+
   $("search").oninput = async () => { await reload(); };
   $("sort").onchange = async () => { await reload(); };
 }
@@ -589,7 +630,8 @@ async function reload() {
   } else {
     const params = new URLSearchParams({ market: state.market, sort });
     if (q) params.set("q", q);
-    state.rows = await getJSON(`/api/securities?${params}`);
+    // 서버는 5년 하락률로 정렬해 보낸다. 비교 기간을 바꿨으면 다시 정렬한다.
+    state.rows = filterAndSort(await getJSON(`/api/securities?${params}`), "", sort);
   }
   renderHitCount();
   renderList();
@@ -600,6 +642,7 @@ async function reload() {
 async function loadMarket() {
   renderMarketTabs();
   state.selected = null;
+  state.detail = null;
   state.rows = [];
   $("detail-panel").innerHTML = `<p class="placeholder">왼쪽에서 종목을 선택하세요.</p>`;
   try {
