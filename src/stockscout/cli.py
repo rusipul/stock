@@ -21,6 +21,14 @@ from stockscout.store.repository import Repository
 
 UNIVERSE_SOURCES = ("yaml", "krx")
 
+# 주가 수집 시작일을 "어제 - N년"보다 이만큼 앞당긴다. 분석의 기준일(as_of)은
+# 어제가 아니라 마지막 봉의 날짜라 주말·휴장·미확정 봉만큼 이르다. 시작일을
+# 딱 맞추면 가격 필터의 요건 시작일(as_of - N년)이 첫 봉보다 앞서 전 종목이
+# INSUFFICIENT_HISTORY가 된다(실측: 2026-10-29 미국 40종목 전부). 긴 연휴
+# (설·추석)를 덮는 2주다. 평균은 analyze가 as_of 기준 창으로 잘라 읽으므로
+# 앞당긴 봉이 섞이지 않는다.
+PRICE_START_MARGIN_DAYS = 14
+
 
 def price_window(years: int, today: date | None = None) -> tuple[date, date]:
     """수집할 주가 구간. 오늘은 제외한다.
@@ -44,7 +52,7 @@ def price_window(years: int, today: date | None = None) -> tuple[date, date]:
         start = end.replace(year=end.year - years)
     except ValueError:  # 2월 29일
         start = end.replace(year=end.year - years, day=28)
-    return start, end
+    return start - timedelta(days=PRICE_START_MARGIN_DAYS), end
 
 
 def fiscal_years(count: int, today: date | None = None, market: str = "KR") -> list[int]:

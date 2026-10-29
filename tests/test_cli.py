@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -7,6 +7,7 @@ from stockscout.cli import (
     build_universe,
     fiscal_years,
     main,
+    PRICE_START_MARGIN_DAYS,
     price_window,
     serve,
 )
@@ -88,7 +89,7 @@ def test_price_window_excludes_today():
     start, end = price_window(years=5, today=date(2026, 9, 11))
 
     assert end == date(2026, 9, 10)
-    assert start == date(2021, 9, 10)
+    assert start == date(2021, 9, 10) - timedelta(days=PRICE_START_MARGIN_DAYS)
 
 
 def test_price_window_handles_leap_day():
@@ -96,7 +97,23 @@ def test_price_window_handles_leap_day():
     start, end = price_window(years=5, today=date(2024, 3, 1))
 
     assert end == date(2024, 2, 29)   # 윤일이 종료일이 된다
-    assert start == date(2019, 2, 28)  # 2019년에는 2/29가 없다
+    # 2019년에는 2/29가 없다
+    assert start == date(2019, 2, 28) - timedelta(days=PRICE_START_MARGIN_DAYS)
+
+
+def test_price_window_reaches_past_five_years_before_the_last_bar():
+    """마지막 봉은 '어제'보다 이를 수 있다. 그래도 5년 요건을 채워야 한다.
+
+    실측(2026-10-29 미국 수집): 어제(10-28) 봉의 종가가 아직 NaN이라
+    as_of가 10-27이 됐다. 시작일이 정확히 '어제 - 5년'(2021-10-28)이면
+    가격 필터의 요건 시작일(as_of - 5년 = 2021-10-27)보다 하루 늦어
+    40종목 전부가 INSUFFICIENT_HISTORY로 떨어졌다. 한국도 월요일에
+    수집하면(어제 = 일요일, as_of = 금요일) 똑같이 된다.
+    """
+    start, _ = price_window(years=5, today=date(2026, 10, 29))
+    as_of = date(2026, 10, 27) - timedelta(days=10)   # 긴 연휴로 열흘 비어도
+
+    assert start <= as_of.replace(year=as_of.year - 5)
 
 
 def test_fiscal_years_excludes_current_year():
