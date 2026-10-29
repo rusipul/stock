@@ -388,3 +388,49 @@ def test_fetch_audit_retries_800_exactly_three_times(monkeypatch):
         source.fetch_audit("005930.KS", [2024])
 
     assert calls["n"] == 3
+
+
+# --- 연결재무제표가 없는 회사 (계획 E 후속, 코스닥) ------------------------
+
+
+def test_a_company_without_consolidated_statements_falls_back_to_separate():
+    """실측: 리노공업·펩트론 등 코스닥 4곳은 자회사가 없어 연결재무제표가 없다.
+
+    CFS가 013(데이터 없음)이면 OFS(별도)를 받는다. 자회사가 없는 회사의
+    별도재무제표는 곧 회사 전체 재무라 대체값이 아니다. 어느 쪽인지는
+    payload의 fs_div로 남긴다.
+    """
+    seen = []
+
+    def handler(request):
+        fs_div = request.url.params.get("fs_div")
+        seen.append(fs_div)
+        if fs_div == "CFS":
+            return json_response("013", "조회된 데이타가 없습니다.")
+        return json_response("000", list=[{"sj_div": "BS", "account_id": "x",
+                                           "account_nm": "자산총계",
+                                           "thstrm_amount": "100"}])
+
+    src = make_source(handler)
+    src.corp_codes = {"058470": "00000001"}
+
+    (stmt,) = src.fetch_annual("058470.KQ", [2025])
+
+    assert seen == ["CFS", "OFS"]
+    assert stmt.payload["fs_div"] == "OFS"
+
+
+def test_consolidated_statements_win_when_they_exist():
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.params.get("fs_div"))
+        return json_response("000", list=[])
+
+    src = make_source(handler)
+    src.corp_codes = {"005930": "00126380"}
+
+    (stmt,) = src.fetch_annual("005930.KS", [2025])
+
+    assert seen == ["CFS"]
+    assert stmt.payload["fs_div"] == "CFS"

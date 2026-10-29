@@ -197,10 +197,20 @@ class DartSource:
 
     @retry_on_transient(attempts=3)
     def _fetch_one_year(self, corp_code: str, year: int) -> dict | None:
-        """한 회계연도의 연결 재무제표 원본. 데이터가 없으면 None."""
-        return self._fetch_json(
-            "fnlttSinglAcntAll.json", corp_code, year, {"fs_div": "CFS"}
-        )
+        """한 회계연도의 재무제표 원본. 연결(CFS)을 먼저, 없으면 별도(OFS).
+
+        자회사가 없는 회사는 연결재무제표를 내지 않는다(실측: 리노공업·
+        펩트론 등 코스닥 4곳). 그 회사의 별도재무제표는 곧 회사 전체
+        재무라 대체값이 아니다. 어느 쪽을 받았는지는 payload의 fs_div로
+        남긴다. 둘 다 없으면 None.
+        """
+        for fs_div in ("CFS", "OFS"):
+            payload = self._fetch_json(
+                "fnlttSinglAcntAll.json", corp_code, year, {"fs_div": fs_div}
+            )
+            if payload is not None:
+                return {**payload, "fs_div": fs_div}
+        return None
 
     @retry_on_transient(attempts=3)
     def _fetch_shares_one_year(self, corp_code: str, year: int) -> dict | None:
