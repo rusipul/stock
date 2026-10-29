@@ -207,6 +207,22 @@ class FilterOutcome(BaseModel):
         return not self.failures
 
 
+class DrawdownStat(BaseModel):
+    """최근 N개월의 고점 대비 하락과 하락 멈춤 여부.
+
+    low는 고점 이후의 최저 종가다 - 이번 하락의 바닥. days_since_low는 그
+    바닥 이후 지난 거래일(봉) 수다.
+    """
+
+    high: float
+    drop_from_high: float
+    low: float
+    days_since_low: int
+    above_ma: bool                # 현재가 >= 이동평균(기본 20거래일)
+    stabilized: bool              # 저점 이후 일정 거래일 경과 또는 이동평균 회복
+    market_drop: float | None = None   # 같은 기간 시장 지수의 고점 대비 하락
+
+
 class PriceStats(BaseModel):
     """가격 통계 (설계서 §9.1).
 
@@ -223,6 +239,8 @@ class PriceStats(BaseModel):
     # 쓴다. high_5y·drop_vs_high는 등급 판정(§9.1의 5년 고점)이 그대로 쓴다.
     high_by_window: dict[int, float] = {}
     drop_vs_high_by_window: dict[int, float] = {}
+    # 개월 -> 최근 그 기간의 고점 대비 하락. 등급 판정(단기 급락)이 쓴다.
+    drawdown: dict[int, DrawdownStat] = {}
 
 
 class Valuation(BaseModel):
@@ -342,6 +360,7 @@ class AnalysisResult(BaseModel):
     score_detail: str | None = None
     signal_grade: str | None = None
     signal_reason: str | None = None
+    benchmark: str | None = None   # 시장 비교 지수 기호 (benchmarks.py)
 
     @property
     def passed_filters(self) -> bool:

@@ -96,18 +96,22 @@ def test_every_row_has_a_grade(rows):
         assert row["signal_grade"] in ("STRONG", "WATCH", "NONE"), row["ticker"]
 
 
+def _dd3(row):
+    return json.loads(row["drawdown_stats"])["windows"]["3"]
+
+
 def test_a_graded_security_is_both_quality_and_fallen(rows):
-    """등급이 붙었으면 점수 기준과 하락 기준을 둘 다 넘었어야 한다."""
+    """등급이 붙었으면 점수 기준과 단기 하락 기준(3개월 -25%)을 둘 다 넘었어야 한다."""
     for row in rows:
         if row["signal_grade"] in ("STRONG", "WATCH"):
             assert row["passed_filters"], row["ticker"]
             assert row["score_total"] >= 70, row["ticker"]
-            assert (row["drop_vs_avg_5y"] is not None and row["drop_vs_avg_5y"] <= -0.40
-                    or row["drop_vs_high"] <= -0.40), row["ticker"]
+            assert _dd3(row)["drop_from_high"] <= -0.25, row["ticker"]
 
 
-def test_two_stars_require_both_thresholds(rows):
+def test_two_stars_mean_the_drop_has_stopped(rows):
     for row in rows:
         if row["signal_grade"] == "STRONG":
-            assert row["drop_vs_avg_5y"] <= -0.40, row["ticker"]
-            assert row["drop_vs_high"] <= -0.40, row["ticker"]
+            assert _dd3(row)["stabilized"], row["ticker"]
+        if row["signal_grade"] == "WATCH":
+            assert not _dd3(row)["stabilized"], row["ticker"]

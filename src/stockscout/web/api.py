@@ -111,6 +111,7 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                 excluded=sum(1 for r in rows if not r["passed_filters"]),
                 has_scores=any(r["score_total"] is not None for r in rows),
                 has_valuation=any(r["per"] is not None for r in rows),
+                **_signal_settings(snap.config_json),
             )
 
         return read(build)
@@ -155,6 +156,8 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                     drop_vs_avg_5y=r["drop_vs_avg_5y"],
                     drop_vs_high=r["drop_vs_high"],
                     window_stats=_window_stats(r),
+                    drawdown=_drawdown(r),
+                    benchmark=_benchmark(r),
                     score_total=r["score_total"],
                     market_cap=r["market_cap"],
                     per=r["per"],
@@ -205,6 +208,8 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                 drop_vs_avg_5y=row["drop_vs_avg_5y"],
                 drop_vs_high=row["drop_vs_high"],
                 window_stats=_window_stats(row),
+                drawdown=_drawdown(row),
+                benchmark=_benchmark(row),
                 score_total=row["score_total"],
                 market_cap=row["market_cap"],
                 per=row["per"],
@@ -284,6 +289,35 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
+
+
+def _drawdown_json(row) -> dict:
+    stored = row.get("drawdown_stats")
+    return json.loads(stored) if stored else {}
+
+
+def _drawdown(row) -> dict[int, dict]:
+    """개월 -> 단기 하락. 이 컬럼 이전 스냅샷은 빈 dict다(화면은 등급을 비운다)."""
+    return {int(k): v for k, v in _drawdown_json(row).get("windows", {}).items()}
+
+
+def _benchmark(row) -> str | None:
+    return _drawdown_json(row).get("benchmark")
+
+
+def _signal_settings(config_json: str) -> dict:
+    """스냅샷을 만든 설정의 하락 기준. 화면 슬라이더의 기본값이 된다.
+
+    스냅샷의 config_json에서 읽는다 - 지금 settings.yaml이 아니라 그 실행이
+    무엇으로 판정했는지가 화면과 맞아야 한다. 없으면 SignalConfig 기본값.
+    """
+    from stockscout.config import SignalConfig
+
+    raw = (json.loads(config_json or "{}") or {}).get("signal") or {}
+    signal = SignalConfig.model_validate(raw)
+    return {"drawdown_months": signal.drawdown_months,
+            "drawdown_threshold": signal.drawdown_threshold,
+            "drawdown_choices": signal.drawdown_choices}
 
 
 def _window_stats(row) -> dict[int, dict]:

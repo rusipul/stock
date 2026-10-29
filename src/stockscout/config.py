@@ -98,9 +98,33 @@ class MetricConfig(BaseModel):
 
 
 class SignalConfig(BaseModel):
+    """등급 판정 기준. 우량주가 최근 몇 달 사이 크게 빠졌고 멈췄는가.
+
+    후보 = 점수 >= min_score 이고 최근 drawdown_months개월 고점 대비
+    drawdown_threshold 이하. 그중 하락이 멈춘 종목이 별 둘, 아직 빠지는
+    중이면 별 하나다. 하락 멈춤 = 저점 이후 stable_days 거래일 이상 경과
+    또는 현재가 >= ma_days 이동평균.
+    """
+
     min_score: float = 70.0
+    drawdown_months: int = 3
+    drawdown_threshold: float = -0.25
+    # 계산해 두는 기간(개월). 화면의 하락 기간 슬라이더가 이 중에서 고른다.
+    drawdown_choices: list[int] = [1, 3, 6, 12]
+    stable_days: int = Field(default=10, ge=1)
+    ma_days: int = Field(default=20, ge=1)
+    # 5년 평균·고점 기준(계획 C). 판정에는 더 쓰지 않고 근거 표시에만 남는다.
     drop_vs_avg_threshold: float = -0.40
     drop_vs_high_threshold: float = -0.40
+
+    @model_validator(mode="after")
+    def drawdown_months_must_be_computed(self) -> "SignalConfig":
+        if self.drawdown_months not in self.drawdown_choices:
+            raise ValueError(
+                f"drawdown_months({self.drawdown_months})가 "
+                f"drawdown_choices({self.drawdown_choices})에 없습니다"
+            )
+        return self
 
 
 class SourcesConfig(BaseModel):

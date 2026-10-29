@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from stockscout.models import Financials, PriceBar, PriceStats, Valuation
+from stockscout.models import DrawdownStat, Financials, PriceBar, PriceStats, Valuation
 
 # 고점 창은 설계서 §9.1이 5년으로 못박은 값이다. 창별 평균(1·3·5년)과
 # 달리 설정으로 바뀌지 않으므로 상수로 둔다. analysis_results 컬럼명도
@@ -146,3 +146,67 @@ def compute_valuation(price: float, latest: Financials | None) -> Valuation:
             pbr = price / bps
 
     return Valuation(market_cap=market_cap, per=per, pbr=pbr)
+
+
+# --- 단기 하락 (최근 N개월) ------------------------------------------------
+
+
+def months_before(as_of: date, months: int) -> date:
+    """as_of로부터 months개월 전. 달력 기준이고, 없는 날짜는 그 달 말일이다."""
+    total = as_of.year * 12 + (as_of.month - 1) - months
+    year, month = divmod(total, 12)
+    month += 1
+    for day in (as_of.day, 30, 29, 28):
+        try:
+            return date(year, month, day)
+        except ValueError:
+            continue
+    raise AssertionError("도달하지 않는다")
+
+
+def compute_drawdowns(
+    bars: list[PriceBar],
+    as_of: date,
+    months: list[int],
+    stable_days: int = 10,
+    ma_days: int = 20,
+) -> dict[int, DrawdownStat]:
+    """기간(개월)별 고점 대비 하락과 하락 멈춤 여부.
+
+    하락 멈춤은 반등 예측이 아니다. 아직 바닥을 새로 쓰고 있는 종목
+    (떨어지는 칼날)과 바닥을 다진 종목을 가를 뿐이다:
+    - 이번 하락의 저점(고점 이후 최저 종가) 이후 stable_days 거래일 이상
+      새 저점이 없었거나
+    - 현재가가 ma_days 이동평균 이상으로 회복했으면 멈춘 것으로 본다
+
+    as_of 이후 봉은 버린다 (compute_price_stats와 같은 look-ahead 규칙).
+    그 기간에 봉이 하나도 없으면 결과에서 뺀다.
+    """
+    ordered = [b for b in sorted(bars, key=lambda b: b.date) if b.date <= as_of]
+    if not ordered:
+        return {}
+    current = ordered[-1].close
+    recent = [b.close for b in ordered[-ma_days:]]
+    above_ma = len(recent) == ma_days and current >= sum(recent) / ma_days
+
+    out: dict[int, DrawdownStat] = {}
+    for n in months:
+        start = months_before(as_of, n)
+        window = [b for b in ordered if b.date >= start]
+        if not window:
+            continue
+        high_at = max(range(len(window)), key=lambda i: (window[i].close, -i))
+        after_high = window[high_at:]
+        # 같은 저점이 여러 번이면 처음 닿은 날부터 센다 - 같은 값은 새 저점이 아니다.
+        low_at = min(range(len(after_high)), key=lambda i: (after_high[i].close, i))
+        days_since_low = len(after_high) - 1 - low_at
+        high = window[high_at].close
+        out[n] = DrawdownStat(
+            high=high,
+            drop_from_high=current / high - 1 if high > 0 else 0.0,
+            low=after_high[low_at].close,
+            days_since_low=days_since_low,
+            above_ma=above_ma,
+            stabilized=days_since_low >= stable_days or above_ma,
+        )
+    return out

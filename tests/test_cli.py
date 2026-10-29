@@ -314,7 +314,7 @@ def test_main_collect_normalizes_plain_kr_ticker_before_dispatch(tmp_path, monke
 
     def fake_collect_market(
         repo, market, fundamentals, prices, years, price_start, price_end,
-        tickers=None, force=False,
+        tickers=None, force=False, benchmarks=None,
     ):
         captured["tickers"] = tickers
         return CollectSummary(total=0)

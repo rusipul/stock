@@ -786,3 +786,40 @@ def test_summary_render_with_audits_is_cp949_safe():
     """한국어 Windows 콘솔은 cp949다. 요약 한 줄이 늘어나도 깨지면 안 된다."""
     CollectSummary(total=1, succeeded=1, statements=5, shares=5,
                    audits=5, price_bars=100).render().encode("cp949")
+
+
+
+# --- 시장 비교 지수 --------------------------------------------------------
+
+
+def test_collect_fetches_the_market_indices(repo):
+    """지수는 종목이 아니라 securities에 넣지 않는다. 시장 단위 조회에 섞이지 않는다."""
+    sync_universe(repo, FakeUniverse([sec()]), market="KR")
+    index = FakePrices({"^KS11": [PriceBar(ticker="^KS11", date=date(2026, 9, 10),
+                                           close=3000.0)]})
+    index.name = "yfinance"
+
+    summary = collect_market(
+        repo, market="KR", fundamentals=FakeFundamentals(), prices=FakePrices(),
+        years=[], price_start=date(2021, 9, 10), price_end=date(2026, 9, 10),
+        benchmarks=index,
+    )
+
+    assert [t for t, _, _ in index.requested] == ["^KS11", "^KQ11"]
+    assert repo.get_price_bars("^KS11")[0].close == 3000.0
+    assert summary.benchmark_bars == 1
+    assert repo.get_security("^KS11") is None
+
+
+def test_a_failing_index_does_not_fail_the_securities(repo):
+    sync_universe(repo, FakeUniverse([sec()]), market="KR")
+    index = FakePrices(failures={"^KS11": ConnectionError("yahoo down")})
+
+    summary = collect_market(
+        repo, market="KR", fundamentals=FakeFundamentals(), prices=FakePrices(),
+        years=[], price_start=date(2021, 9, 10), price_end=date(2026, 9, 10),
+        benchmarks=index,
+    )
+
+    assert summary.succeeded == 1
+    assert any("^KS11" in e["ticker"] for e in repo.recent_errors(limit=5))

@@ -6,6 +6,7 @@ from datetime import date
 
 from pydantic import BaseModel
 
+from stockscout.benchmarks import benchmarks_of
 from stockscout.sources.base import FatalSourceError, FundamentalSource, PriceSource
 from stockscout.sources.dart import SOURCE_AUDIT, SOURCE_SHARES
 from stockscout.sources.ratelimit import DailyQuotaExceeded
@@ -33,6 +34,7 @@ class CollectSummary(BaseModel):
     shares: int = 0
     audits: int = 0
     price_bars: int = 0
+    benchmark_bars: int = 0
     aborted: bool = False
     abort_reason: str | None = None
     remaining: list[str] = []
@@ -43,6 +45,8 @@ class CollectSummary(BaseModel):
             f"재무제표 {self.statements}건 · 주식수 {self.shares}건 "
             f"· 감사의견 {self.audits}건 · 주가 {self.price_bars}봉 저장",
         ]
+        if self.benchmark_bars:
+            lines.append(f"시장 지수 {self.benchmark_bars}봉 저장")
         if self.aborted:
             # 중단 사유는 늘 일일 한도 소진이 아니다 (예: 등록되지 않은 API
             # 키). abort_reason이 없으면(방어적 기본값) 그렇게만 말한다.
@@ -84,6 +88,7 @@ def collect_market(
     price_end: date,
     tickers: list[str] | None = None,
     force: bool = False,
+    benchmarks: PriceSource | None = None,
 ) -> CollectSummary:
     """한 시장의 재무·주가를 수집한다.
 
@@ -178,6 +183,18 @@ def collect_market(
             summary.failed += 1
         else:
             summary.succeeded += 1
+
+    # 시장 비교 지수. 종목 수집과 별개라 실패해도 종목 결과는 그대로다 -
+    # 지수가 없으면 화면의 "시장 대비"만 빈다. 특정 종목만 수집할 때는
+    # 건너뛴다(--tickers는 그 종목만 받으려는 것이다).
+    if benchmarks is not None and tickers is None and not summary.aborted:
+        for symbol in benchmarks_of(market):
+            try:
+                summary.benchmark_bars += _collect_prices(
+                    repo, symbol, benchmarks, price_start, price_end)
+            except Exception as exc:
+                repo.record_error(symbol, benchmarks.name,
+                                  f"{type(exc).__name__}: {exc}")
 
     return summary
 

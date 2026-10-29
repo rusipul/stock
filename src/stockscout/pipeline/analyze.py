@@ -17,10 +17,12 @@ from stockscout.analysis.grading import grade_signal
 from stockscout.analysis.scoring import score_security
 from stockscout.analysis.valuation import (
     HIGH_WINDOW_YEARS,
+    compute_drawdowns,
     compute_price_stats,
     compute_valuation,
     window_start,
 )
+from stockscout.benchmarks import benchmark_for
 from stockscout.config import Config
 from stockscout.models import AnalysisResult, FilterOutcome, ScoreCard, Snapshot
 from stockscout.store.repository import Repository
@@ -95,6 +97,22 @@ def analyze_market(
         _earliest_window_start(as_of, windows), as_of, market=market
     )
 
+    signal = config.signal
+    index_drops: dict[str, dict] = {}   # 지수 기호 -> 개월 -> 고점 대비 하락
+
+    def market_drops(symbol: str) -> dict:
+        if symbol not in index_drops:
+            index_bars = repo.get_price_bars(
+                symbol, start=_earliest_window_start(as_of, windows), end=as_of)
+            index_drops[symbol] = {
+                n: d.drop_from_high
+                for n, d in compute_drawdowns(
+                    index_bars, as_of=as_of, months=signal.drawdown_choices,
+                    stable_days=signal.stable_days, ma_days=signal.ma_days,
+                ).items()
+            }
+        return index_drops[symbol]
+
     results: list[AnalysisResult] = []
     for security in repo.list_securities(market=market):
         bars = repo.get_price_bars(
@@ -111,6 +129,15 @@ def analyze_market(
                 bars, as_of=as_of, windows=windows, calendar=calendar,
                 min_coverage=config.lookback.min_data_coverage,
             )
+            benchmark = benchmark_for(security)
+            drops = market_drops(benchmark)
+            stats.drawdown = {
+                n: d.model_copy(update={"market_drop": drops.get(n)})
+                for n, d in compute_drawdowns(
+                    bars, as_of=as_of, months=signal.drawdown_choices,
+                    stable_days=signal.stable_days, ma_days=signal.ma_days,
+                ).items()
+            }
             outcome = apply_price_filters(
                 security,
                 repo.first_price_date(security.ticker),
@@ -137,8 +164,7 @@ def analyze_market(
                 stats,
                 score_total=card.total if card else None,
                 passed_filters=outcome.passed,
-                config=config.signal,
-                primary_window=config.lookback.primary_window,
+                config=signal,
             )
         except Exception as exc:
             repo.record_error(security.ticker, "analyze",
@@ -157,6 +183,7 @@ def analyze_market(
             score_detail=card.model_dump_json() if card else None,
             signal_grade=grade,
             signal_reason=reason,
+            benchmark=benchmark,
         ))
         summary.analyzed += 1
         if outcome.passed:

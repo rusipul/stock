@@ -311,6 +311,9 @@ def main(argv: list[str] | None = None) -> int:
                 price_end=end,
                 tickers=tickers,
                 force=args.force,
+                # 시장 비교 지수(코스피·코스닥·S&P 500)는 시장과 무관하게
+                # Yahoo에서 받는다. pykrx의 지수 조회는 KRX 로그인이 필요하다.
+                benchmarks=YahooPriceSource(),
             )
             print(summary.render())
             if summary.failed:

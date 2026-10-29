@@ -33,7 +33,15 @@ def init_db(conn: sqlite3.Connection) -> None:
     _add_financials_columns_if_missing(conn)
     _add_snapshots_market_column_if_missing(conn)
     _add_window_stats_column_if_missing(conn)
+    _add_drawdown_stats_column_if_missing(conn)
     conn.commit()
+
+
+def _add_drawdown_stats_column_if_missing(conn: sqlite3.Connection) -> None:
+    """단기 하락(최근 N개월) 컬럼. 옛 결과 행은 NULL이고 화면은 등급을 비운다."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(analysis_results)")}
+    if "drawdown_stats" not in columns:
+        conn.execute("ALTER TABLE analysis_results ADD COLUMN drawdown_stats TEXT")
 
 
 def _add_window_stats_column_if_missing(conn: sqlite3.Connection) -> None:

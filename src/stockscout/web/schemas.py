@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from stockscout.models import DrawdownStat
+
 
 class SnapshotInfo(BaseModel):
     snapshot_id: int
@@ -25,6 +27,11 @@ class SnapshotInfo(BaseModel):
     # 프론트가 어떤 UI를 켤지 결정하는 근거.
     # 점수가 없는데 등급을 보여주면 품질을 검증한 것처럼 보이는 거짓말이 된다.
     has_scores: bool
+
+    # 서버가 등급을 매긴 기준. 화면 슬라이더의 기본값이 된다.
+    drawdown_months: int = 3
+    drawdown_threshold: float = -0.25
+    drawdown_choices: list[int] = [1, 3, 6, 12]
 
     # 시가총액·PER·PBR을 계산할 수 있었는가. financials 테이블이 채워졌는지와
     # 다른 질문이다 — 발행주식수는 재무제표 API가 아니라 stockTotqySttus.json
@@ -67,6 +74,9 @@ class SecurityRow(BaseModel):
     drop_vs_avg_5y: float | None
     drop_vs_high: float
     window_stats: dict[int, WindowStat] = {}
+    # 개월 -> 최근 그 기간의 고점 대비 하락·하락 멈춤·같은 기간 시장 하락.
+    drawdown: dict[int, DrawdownStat] = {}
+    benchmark: str | None = None
 
     score_total: float | None
     market_cap: float | None

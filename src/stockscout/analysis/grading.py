@@ -23,12 +23,15 @@ def grade_signal(
     score_total: float | None,
     passed_filters: bool,
     config: SignalConfig,
-    primary_window: int,
 ) -> tuple[str, str]:
     """(등급, 판정 근거 문장)을 낸다.
 
+    목적: 우량주가 최근 몇 달 사이 크게 빠진 경우를 찾는다.
+
     품질이 먼저다. 아무리 많이 떨어져도 우량주가 아니면 등급이 없다 -
-    많이 떨어진 데에는 대개 이유가 있기 때문이다.
+    많이 떨어진 데에는 대개 이유가 있기 때문이다. 그다음 최근
+    drawdown_months개월 고점 대비 하락이 임계치 이하면 후보이고, 그 하락이
+    멈췄으면 별 둘, 아직 빠지는 중이면 별 하나다.
     """
     if not passed_filters:
         return GRADE_NONE, "하드필터에 걸려 등급을 매기지 않습니다"
@@ -40,26 +43,22 @@ def grade_signal(
             f"{config.min_score:.0f}점에 못 미칩니다"
         )
 
-    drop_avg = stats.drop_vs_avg.get(primary_window)
-    avg_hit = drop_avg is not None and drop_avg <= config.drop_vs_avg_threshold
-    high_hit = stats.drop_vs_high <= config.drop_vs_high_threshold
+    months = config.drawdown_months
+    dd = stats.drawdown.get(months)
+    if dd is None:
+        return GRADE_NONE, f"최근 {months}개월 주가가 없어 등급을 매기지 않습니다"
 
-    parts = []
-    if drop_avg is None:
-        parts.append(f"{primary_window}년 평균 대비: 데이터 부족으로 판정 제외")
-    else:
-        parts.append(
-            f"{primary_window}년 평균 대비 {drop_avg * 100:.1f}% "
-            f"{'<=' if avg_hit else '>'} {config.drop_vs_avg_threshold * 100:.0f}%"
-        )
-    parts.append(
-        f"5년 고점 대비 {stats.drop_vs_high * 100:.1f}% "
-        f"{'<=' if high_hit else '>'} {config.drop_vs_high_threshold * 100:.0f}%"
+    hit = dd.drop_from_high <= config.drawdown_threshold
+    reason = (
+        f"우량주 점수 {score_total:.0f}점 · 최근 {months}개월 고점 대비 "
+        f"{dd.drop_from_high * 100:.1f}% {'<=' if hit else '>'} "
+        f"{config.drawdown_threshold * 100:.0f}%"
     )
-    reason = f"우량주 점수 {score_total:.0f}점 · " + " · ".join(parts)
-
-    if avg_hit and high_hit:
-        return GRADE_STRONG, reason
-    if avg_hit or high_hit:
-        return GRADE_WATCH, reason
-    return GRADE_NONE, reason
+    if not hit:
+        return GRADE_NONE, reason
+    if dd.stabilized:
+        return GRADE_STRONG, (
+            f"{reason} · 하락 멈춤 (저점 이후 {dd.days_since_low}거래일"
+            f"{', ' + str(config.ma_days) + '일 이동평균 위' if dd.above_ma else ''})"
+        )
+    return GRADE_WATCH, f"{reason} · 아직 하락 중 (저점 이후 {dd.days_since_low}거래일)"

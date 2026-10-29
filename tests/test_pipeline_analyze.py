@@ -634,14 +634,14 @@ def test_analyze_records_the_grade(repo):
     (row,) = repo.get_analysis_results(summary.snapshot_id)
 
     # 종가가 평탄하니 하락이 없다. 우량주라도 등급은 NONE이고, 근거는
-    # 점수와 하락률을 숫자로 말해야 한다.
+    # 점수와 최근 고점 대비 하락률을 숫자로 말해야 한다.
     assert row["signal_grade"] == "NONE"
     assert "점수" in row["signal_reason"]
-    assert "평균 대비" in row["signal_reason"]
+    assert "3개월 고점 대비 0.0%" in row["signal_reason"]
 
 
-def test_analyze_grades_a_fallen_quality_stock(repo):
-    """우량주가 평균과 고점 모두에서 40% 넘게 빠지면 별 둘."""
+def test_analyze_grades_a_crash_still_in_progress_as_one_star(repo):
+    """오늘 50% 급락한 우량주. 오늘이 저점이고 20일선 아래라 아직 하락 중 - 별 하나."""
     seed(repo, "005930.KS", last=date(2026, 9, 9))
     repo.save_price_bars(
         [PriceBar(ticker="005930.KS", date=date(2026, 9, 10), close=50.0)],
@@ -652,7 +652,8 @@ def test_analyze_grades_a_fallen_quality_stock(repo):
     (row,) = repo.get_analysis_results(summary.snapshot_id)
 
     assert row["score_total"] >= 70
-    assert row["signal_grade"] == "STRONG"
+    assert row["signal_grade"] == "WATCH"
+    assert "아직 하락 중" in row["signal_reason"]
 
 
 def test_analyze_uses_the_markets_hard_filters(repo):
@@ -677,3 +678,63 @@ def test_analyze_uses_the_markets_hard_filters(repo):
     (us_row,) = repo.get_analysis_results(us.snapshot_id)
     assert "HIGH_DEBT" in json.loads(kr_row["filter_failures"])
     assert "HIGH_DEBT" not in json.loads(us_row["filter_failures"])
+
+
+
+# --- 단기 하락 (최근 N개월) -------------------------------------------------
+
+
+def seed_drop(repo, ticker="005930.KS", market="KR", exchange="KOSPI",
+              last=date(2026, 9, 10)):
+    """5년 내내 100이다가 마지막 40일 60으로 빠진 종목."""
+    seed(repo, ticker, market=market, last=last)
+    repo.upsert_security(Security(ticker=ticker, market=market, name=ticker,
+                                  exchange=exchange, currency="KRW"))
+    bars = [PriceBar(ticker=ticker, date=last - timedelta(days=i), close=60.0)
+            for i in range(40)]
+    repo.save_price_bars(bars, source="pykrx")
+
+
+def test_analyze_grades_by_the_recent_drawdown(repo):
+    seed_drop(repo)
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+    dd = json.loads(row["drawdown_stats"])
+    assert dd["windows"]["3"]["drop_from_high"] == pytest.approx(-0.4)
+    assert row["signal_grade"] in ("STRONG", "WATCH")
+    assert "3개월 고점 대비 -40.0%" in row["signal_reason"]
+
+
+def test_analyze_records_the_market_drop_for_the_same_period(repo):
+    seed_drop(repo)
+    repo.save_price_bars(
+        [PriceBar(ticker="^KS11", date=date(2026, 9, 10) - timedelta(days=i),
+                  close=3000.0 if i > 30 else 2700.0) for i in range(200)],
+        source="yfinance")
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+    dd = json.loads(row["drawdown_stats"])
+    assert dd["benchmark"] == "^KS11"
+    assert dd["windows"]["3"]["market_drop"] == pytest.approx(-0.1)
+
+
+def test_a_missing_index_leaves_market_drop_empty(repo):
+    seed_drop(repo)
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+    assert json.loads(row["drawdown_stats"])["windows"]["3"]["market_drop"] is None
+
+
+def test_index_bars_do_not_move_the_as_of_date(repo):
+    """지수 봉이 종목보다 하루 늦어도 기준일은 종목 기준이다."""
+    seed_drop(repo)
+    repo.save_price_bars([PriceBar(ticker="^KS11", date=date(2026, 9, 11),
+                                   close=3000.0)], source="yfinance")
+
+    assert analyze_market(repo, market="KR", config=cfg()).as_of == date(2026, 9, 10)

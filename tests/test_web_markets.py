@@ -163,3 +163,41 @@ def test_rows_saved_before_window_stats_fall_back_to_the_columns(db):
     assert set(row["window_stats"]) == {"1", "3", "5"}
     assert row["window_stats"]["5"]["high"] == 60000.0
     assert row["window_stats"]["1"]["high"] is None
+
+
+
+def test_rows_carry_the_drawdown_and_benchmark(tmp_path):
+    from stockscout.models import DrawdownStat
+
+    path = tmp_path / "dd.db"
+    stats = PriceStats(
+        price_current=60.0, avg_price={5: 100.0}, high_5y=100.0,
+        drop_vs_avg={5: -0.4}, drop_vs_high=-0.4,
+        drawdown={3: DrawdownStat(high=100.0, drop_from_high=-0.4, low=58.0,
+                                  days_since_low=12, above_ma=True,
+                                  stabilized=True, market_drop=-0.1)})
+    with connect(path) as conn:
+        init_db(conn)
+        repo = Repository(conn)
+        repo.upsert_security(Security(ticker="005930.KS", market="KR",
+                                      name="삼성전자", currency="KRW"))
+        repo.save_snapshot(
+            Snapshot(run_at="x", config_hash="h", config_json="{}"),
+            [AnalysisResult(ticker="005930.KS", filters=FilterOutcome(failures=[]),
+                            stats=stats, valuation=Valuation(), benchmark="^KS11")])
+
+    (row,) = TestClient(create_app(db_path=path)).get("/api/securities").json()
+
+    assert row["benchmark"] == "^KS11"
+    assert row["drawdown"]["3"]["drop_from_high"] == -0.4
+    assert row["drawdown"]["3"]["stabilized"] is True
+    assert row["drawdown"]["3"]["market_drop"] == -0.1
+
+
+def test_snapshot_says_which_period_the_server_graded(client):
+    """화면의 하락 기간 슬라이더 기본값이 서버 판정과 같아야 한다."""
+    body = client.get("/api/snapshot").json()
+
+    assert body["drawdown_months"] == 3
+    assert body["drawdown_threshold"] == -0.25
+    assert body["drawdown_choices"] == [1, 3, 6, 12]

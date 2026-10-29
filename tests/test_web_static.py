@@ -154,7 +154,7 @@ def test_index_has_an_element_for_every_id_app_js_looks_up():
 def test_static_files_are_valid_utf8_with_expected_korean():
     html_bytes = (STATIC_DIR / "index.html").read_bytes()
     html = html_bytes.decode("utf-8")  # UTF-8이 아니면 여기서 실패한다
-    assert "하락 임계치" in html
+    assert "고점 대비 하락" in html
 
     css_bytes = (STATIC_DIR / "style.css").read_bytes()
     css_bytes.decode("utf-8")
@@ -301,10 +301,10 @@ def _run_grade_cases(cases):
     if node is None:
         pytest.skip("node 가 없어 등급 판정 실행 검사를 건너뛴다")
 
-    source = (_function_body(js_text(), "windowDrops") + "\n"
+    source = (_function_body(js_text(), "drawdownOf") + "\n"
               + _function_body(js_text(), "gradeOf"))
     script = (
-        "const state = { minScore: 70, dropThreshold: -0.40, window: 5,"
+        "const state = { minScore: 70, dropThreshold: -0.25, months: 3,"
         " snapshot: { has_scores: true } };\n"
         f"{source}\n"
         f"const cases = {_json.dumps(cases)};\n"
@@ -315,24 +315,26 @@ def _run_grade_cases(cases):
     return _json.loads(result.stdout)
 
 
-def _row(score=80.0, avg=-0.45, high=-0.50, passed=True):
+def _row(score=80.0, drop=-0.30, stabilized=True, passed=True, months=3):
     return {"passed_filters": passed, "score_total": score,
-            "drop_vs_avg_5y": avg, "drop_vs_high": high}
+            "drawdown": {str(months): {"drop_from_high": drop,
+                                       "stabilized": stabilized}}}
 
 
 def test_grade_of_matches_the_server_rule():
+    """analysis/grading.py의 grade_signal과 같은 규칙이다."""
     grades = _run_grade_cases([
-        _row(),                          # 둘 다 넘음 -> 별 둘
-        _row(avg=-0.30),                 # 고점만 -> 별 하나
-        _row(score=42.0),                # LG화학: 많이 떨어졌지만 우량주가 아니다
+        _row(),                          # 크게 빠졌고 멈췄다 -> 별 둘
+        _row(stabilized=False),          # 크게 빠졌지만 아직 하락 중 -> 별 하나
+        _row(score=42.0),                # 많이 떨어졌지만 우량주가 아니다
         _row(score=70.0),                # 경계: 70점은 통과
         _row(passed=False, score=None),  # 제외 종목
-        _row(avg=0.1, high=-0.05),       # 우량주지만 안 떨어졌다
-        _row(avg=None, high=-0.50),      # 평균 커버리지 미달 -> 고점만으로 별 하나
-        _row(avg=-0.40, high=-0.40),     # 경계: -40%는 '이하'
+        _row(drop=-0.10),                # 우량주지만 별로 안 빠졌다
+        _row(drop=-0.25),                # 경계: -25%는 '이하'
+        _row(months=6),                  # 3개월 값이 없다(이 기능 이전 스냅샷 등)
     ])
 
-    assert grades == ["STRONG", "WATCH", None, "STRONG", None, None, "WATCH", "STRONG"]
+    assert grades == ["STRONG", "WATCH", None, "STRONG", None, None, "STRONG", None]
 
 
 def test_score_slider_regrades_without_a_server_round_trip():
@@ -462,13 +464,13 @@ def _run_node(script):
 def test_static_filter_and_sort_follow_the_server_rules():
     """정적 화면은 서버 대신 브라우저가 검색·정렬한다. 규칙이 api.list_securities와 같아야 한다."""
     rows = (
-        '[{"ticker":"B","name":"베타","drop_vs_avg_5y":-0.1},'
-        '{"ticker":"A","name":"알파","drop_vs_avg_5y":null},'
-        '{"ticker":"C","name":"Charlie","drop_vs_avg_5y":-0.5}]'
+        '[{"ticker":"B","name":"베타","drawdown":{"3":{"drop_from_high":-0.1}}},'
+        '{"ticker":"A","name":"알파","drawdown":{}},'
+        '{"ticker":"C","name":"Charlie","drawdown":{"3":{"drop_from_high":-0.5}}}]'
     )
     script = (
-        "const state = { window: 5 };\n"
-        f"{_function_body(js_text(), 'windowDrops')}\n"
+        "const state = { months: 3 };\n"
+        f"{_function_body(js_text(), 'drawdownOf')}\n"
         f"{_function_body(js_text(), 'filterAndSort')}\n"
         f"const rows = {rows};\n"
         "const t = (q, s) => filterAndSort(rows, q, s).map(r => r.ticker).join('');\n"
@@ -496,62 +498,65 @@ def test_static_watchlist_lives_in_the_browser():
     assert "stockscout.watchlist" in js_text()
 
 
-# --- 비교 기간 슬라이더 (1~5년) -----------------------------------------
+# --- 하락 기간 슬라이더 (1·3·6·12개월) ------------------------------------
 
 
-def _grade_at(window, rows):
+def _grade_at(months, rows):
     import json as _json
 
     js = js_text()
     script = (
-        f"const state = {{ minScore: 70, dropThreshold: -0.40, window: {window},"
+        f"const state = {{ minScore: 70, dropThreshold: -0.25, months: {months},"
         " snapshot: { has_scores: true } };\n"
-        f"{_function_body(js, 'windowDrops')}\n{_function_body(js, 'gradeOf')}\n"
+        f"{_function_body(js, 'drawdownOf')}\n{_function_body(js, 'gradeOf')}\n"
         f"console.log(JSON.stringify({_json.dumps(rows)}.map(gradeOf)));"
     )
     return _json.loads(_run_node(script))
 
 
-def test_the_window_slider_changes_which_period_is_graded():
-    """5년으로는 별이 없지만 1년으로 보면 평균·고점 모두 -40% 아래인 종목."""
-    row = {
-        "passed_filters": True, "score_total": 80.0,
-        "drop_vs_avg_5y": 0.10, "drop_vs_high": -0.20,
-        "window_stats": {
-            "1": {"drop_vs_avg": -0.45, "drop_vs_high": -0.50},
-            "5": {"drop_vs_avg": 0.10, "drop_vs_high": -0.20},
-        },
-    }
+def test_the_period_slider_changes_which_drop_is_graded():
+    """1개월로는 별로 안 빠졌지만 6개월로 보면 크게 빠진 종목."""
+    row = {"passed_filters": True, "score_total": 80.0, "drawdown": {
+        "1": {"drop_from_high": -0.05, "stabilized": True},
+        "6": {"drop_from_high": -0.40, "stabilized": True},
+    }}
 
-    assert _grade_at(5, [row]) == [None]
-    assert _grade_at(1, [row]) == ["STRONG"]
+    assert _grade_at(1, [row]) == [None]
+    assert _grade_at(6, [row]) == ["STRONG"]
 
 
-def test_a_window_missing_from_an_old_snapshot_has_no_grade():
-    """옛 스냅샷에는 2년 통계가 없다. 5년 값으로 대신 판정하면 안 된다."""
-    row = {"passed_filters": True, "score_total": 80.0,
-           "drop_vs_avg_5y": -0.5, "drop_vs_high": -0.5, "window_stats": {}}
-
-    assert _grade_at(2, [row]) == [None]
-
-
-def test_index_has_the_window_slider():
+def test_index_has_the_period_slider():
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
-    assert 'id="window-years"' in html
-    assert 'min="1"' in html and 'max="5"' in html
+    assert 'id="period"' in html
+    assert 'id="window-years"' not in html
 
 
-def test_the_window_survives_a_reload():
+def test_the_period_and_threshold_survive_a_reload():
     js = js_text()
 
-    assert "stockscout.window" in _function_body(js, "loadPrefs")
-    assert "stockscout.window" in _function_body(js, "savePrefs")
+    for key in ("stockscout.ddMonths", "stockscout.ddThreshold"):
+        assert key in _function_body(js, "loadPrefs")
+        assert key in _function_body(js, "savePrefs")
 
 
-def test_the_window_slider_regrades_without_a_server_round_trip():
+def test_the_period_slider_regrades_without_a_server_round_trip():
     body = _function_body(js_text(), "wireControls")
-    handler = body.split('$("window-years").oninput')[1].split("};")[0]
+    handler = body.split('$("period").oninput')[1].split("};")[0]
 
     assert "getJSON" not in handler and "fetch" not in handler
     assert "renderList" in handler
+
+
+def test_slider_defaults_come_from_the_snapshot():
+    """서버가 판정한 기준(3개월·-25%)이 화면의 기본값이어야 등급이 일치한다."""
+    body = _function_body(js_text(), "loadMarket")
+
+    assert "drawdown_months" in body and "drawdown_threshold" in body
+
+
+def test_the_detail_shows_the_market_drop_and_whether_it_stopped():
+    body = _function_body(js_text(), "renderDetail")
+
+    assert "market_drop" in body
+    assert "stabilized" in body
