@@ -31,6 +31,38 @@ from stockscout.web.schemas import (
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+Market = Literal["KR", "US"]
+
+
+def _no_snapshot(market: str) -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail=(f"{market} 분석 결과가 없습니다. "
+                f"stockscout analyze --market {market} 를 먼저 실행하세요."),
+    )
+
+
+def _snapshot_for_ticker(repo: Repository, ticker: str):
+    """티커의 시장에서 최신 스냅샷과 그 종목의 행을 찾는다.
+
+    상세·차트 API는 티커만 받는다. 시장을 모르고 전체 최신 스냅샷을 보면
+    미국을 나중에 분석한 순간 한국 종목이 전부 404가 된다.
+    """
+    master = repo.get_security(ticker)
+    market = master.market if master else "KR"
+    snap = repo.get_latest_snapshot(market=market)
+    if snap is None:
+        raise _no_snapshot(market)
+    row = next(
+        (r for r in repo.get_analysis_results(snap.snapshot_id)
+         if r["ticker"] == ticker),
+        None,
+    )
+    if row is None:
+        raise HTTPException(status_code=404,
+                            detail=f"{ticker} 는 최신 스냅샷에 없습니다.")
+    return master, snap, row
+
 
 class ChartWindow(IntEnum):
     """차트에 그릴 구간(년). 스키마가 허용값을 스스로 문서화한다.
@@ -61,17 +93,15 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
             return fn(Repository(conn))
 
     @app.get("/api/snapshot", response_model=SnapshotInfo)
-    def get_snapshot() -> SnapshotInfo:
+    def get_snapshot(market: Market = "KR") -> SnapshotInfo:
         def build(repo: Repository) -> SnapshotInfo:
-            snap = repo.get_latest_snapshot()
+            snap = repo.get_latest_snapshot(market=market)
             if snap is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail="분석 결과가 없습니다. stockscout analyze 를 먼저 실행하세요.",
-                )
+                raise _no_snapshot(market)
             rows = repo.get_analysis_results(snap.snapshot_id)
             return SnapshotInfo(
                 snapshot_id=snap.snapshot_id,
+                market=snap.market,
                 run_at=snap.run_at,
                 as_of=snap.as_of,
                 config_hash=snap.config_hash,
@@ -87,6 +117,7 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
 
     @app.get("/api/securities", response_model=list[SecurityRow])
     def list_securities(
+        market: Market = "KR",
         q: str | None = None,
         sort: Literal["drop", "name", "ticker"] = "drop",
     ) -> list[SecurityRow]:
@@ -97,13 +128,11 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
         서버 왕복을 없애는 것이 이 화면의 핵심 반응성이다.
         """
         def build(repo: Repository) -> list[SecurityRow]:
-            snap = repo.get_latest_snapshot()
+            snap = repo.get_latest_snapshot(market=market)
             if snap is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail="분석 결과가 없습니다. stockscout analyze 를 먼저 실행하세요.",
-                )
-            masters = {s.ticker: s for s in repo.list_securities(in_universe_only=False)}
+                raise _no_snapshot(market)
+            masters = {s.ticker: s for s in
+                       repo.list_securities(market=market, in_universe_only=False)}
             watched = repo.watchlist_tickers()
 
             rows = []
@@ -153,20 +182,7 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
     @app.get("/api/securities/{ticker}", response_model=SecurityDetail)
     def get_security(ticker: str) -> SecurityDetail:
         def build(repo: Repository) -> SecurityDetail:
-            snap = repo.get_latest_snapshot()
-            if snap is None:
-                raise HTTPException(status_code=404, detail="분석 결과가 없습니다.")
-            row = next(
-                (r for r in repo.get_analysis_results(snap.snapshot_id)
-                 if r["ticker"] == ticker),
-                None,
-            )
-            if row is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"{ticker} 는 최신 스냅샷에 없습니다.",
-                )
-            master = repo.get_security(ticker)
+            master, snap, row = _snapshot_for_ticker(repo, ticker)
             failures = json.loads(row["filter_failures"] or "[]")
             financials = repo.get_financials(ticker)
 
@@ -217,18 +233,7 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
         years: ChartWindow = ChartWindow.FIVE,
     ) -> PriceSeries:
         def build(repo: Repository) -> PriceSeries:
-            snap = repo.get_latest_snapshot()
-            if snap is None:
-                raise HTTPException(status_code=404, detail="분석 결과가 없습니다.")
-            row = next(
-                (r for r in repo.get_analysis_results(snap.snapshot_id)
-                 if r["ticker"] == ticker),
-                None,
-            )
-            if row is None:
-                raise HTTPException(
-                    status_code=404, detail=f"{ticker} 는 최신 스냅샷에 없습니다.")
-
+            _, snap, row = _snapshot_for_ticker(repo, ticker)
             as_of = date.fromisoformat(snap.as_of) if snap.as_of else None
             start = _window_start(as_of, years) if as_of else None
             bars = repo.get_price_bars(ticker, start=start, end=as_of)

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 class SnapshotInfo(BaseModel):
     snapshot_id: int
+    market: str        # 'KR' | 'US'. 화면이 통화 표시와 탭을 고른다
     run_at: str
     as_of: str | None
     config_hash: str
