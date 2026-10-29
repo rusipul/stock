@@ -438,7 +438,7 @@ def test_financial_amounts_are_in_millions_of_dollars_for_us():
                          text=True, encoding="utf-8")
 
     assert out.returncode == 0, out.stderr
-    assert out.stdout.split() == ["$82,584M", "—", "279,604,799,000,000"]
+    assert out.stdout.split() == ["$82,584M", "—", "2,796,048억"]
 
 
 def test_the_financials_table_formats_amounts_with_amount():
@@ -591,3 +591,21 @@ def test_the_detail_shows_recent_results_against_last_year():
 def test_the_chart_is_drawn_without_animation():
     """실측: 애니메이션 중 멈춰 선이 2023년에서 끊긴 채 남았다(1,159점)."""
     assert "animation: false" in _function_body(js_text(), "drawChart")
+
+
+# --- 상세 화면 격자 (UI.pptx) -----------------------------------------------
+
+
+def test_the_detail_is_laid_out_as_the_ui_slide():
+    """윗메뉴 / 차트 / 적합점수·판정근거 / 재무추이·공시."""
+    body = _function_body(js_text(), "renderDetail")
+
+    for cell in ("cell-top", "cell-chart", "cell-score", "cell-reason",
+                 "cell-fin", "cell-filings"):
+        assert cell in body
+    css = (STATIC_DIR / "style.css").read_text(encoding="utf-8")
+    assert '"score  reason"' in css and '"fin    filings"' in css
+
+
+def test_the_financials_table_shows_the_last_five_years():
+    assert "slice(-FIN_YEARS_SHOWN)" in _function_body(js_text(), "financialsTable")
