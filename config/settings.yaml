@@ -18,6 +18,15 @@ hard_filters:
   max_revenue_decline_3y: -0.5
   min_history_years: 5
 
+# 시장별로 위 hard_filters의 일부만 덮어쓴다 (설계서 §18.4).
+# 미국 대형주는 자사주 매입으로 자본이 작아 부채비율이 수백 %다(실측:
+# AAPL·KO·PEP·HD 등 15종목이 이것 하나로 제외됐다). 사업이 아니라 자본
+# 정책의 결과라 하드필터에서는 끈다(.inf). 점수의 안정성 축 부채비율
+# 지표는 그대로 남는다.
+hard_filters_by_market:
+  US:
+    max_debt_ratio: .inf
+
 scoring:
   profitability:
     roe_avg3:        {points: 10, bands: [[0.15, 10], [0.10, 7], [0.05, 4], [0.0, 1]]}

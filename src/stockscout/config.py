@@ -106,9 +106,29 @@ class Config(BaseModel):
     universe: UniverseConfig = UniverseConfig()
     lookback: LookbackConfig = LookbackConfig()
     hard_filters: HardFilterConfig = HardFilterConfig()
+    # 시장별로 hard_filters의 일부 필드만 덮어쓴다 (설계서 §18.4).
+    # 예: 미국은 자사주 매입으로 자본이 작은 대형주가 많아 부채비율이
+    # 무의미하다 - {"US": {"max_debt_ratio": .inf}}.
+    hard_filters_by_market: dict[str, dict] = {}
     scoring: dict[str, dict[str, MetricConfig]] = {}
     signal: SignalConfig = SignalConfig()
     sources: SourcesConfig = SourcesConfig()
+
+    def hard_filters_for(self, market: str) -> HardFilterConfig:
+        """그 시장에 적용할 하드필터. 덮어쓴 결과도 같은 검증을 거친다.
+
+        모르는 필드는 거부한다. 오타(max_dept_ratio)가 조용히 무시되면
+        끄려던 필터가 켜진 채로 남고, 아무도 그것을 알 수 없다.
+        """
+        override = self.hard_filters_by_market.get(market) or {}
+        unknown = set(override) - set(HardFilterConfig.model_fields)
+        if unknown:
+            raise ValueError(
+                f"hard_filters_by_market.{market}에 모르는 필드가 있습니다: "
+                f"{sorted(unknown)}"
+            )
+        return HardFilterConfig.model_validate(
+            {**self.hard_filters.model_dump(), **override})
 
 
 class Secrets(BaseModel):

@@ -81,6 +81,7 @@ def analyze_market(
 
     summary = AnalyzeSummary()
     windows = config.lookback.price_years
+    hard_filters = config.hard_filters_for(market)
     # market으로 한정한다: 시장마다 마감 시각이 달라(예: 미국 장은 한국보다
     # 늦게 마감) 시장을 구분하지 않으면 다른 시장의 최신 봉 날짜가 이
     # 시장의 as_of를 밀어버려, 아직 그 시장에 존재하지 않는 날짜를
@@ -114,7 +115,7 @@ def analyze_market(
                 security,
                 repo.first_price_date(security.ticker),
                 as_of=as_of,
-                min_history_years=config.hard_filters.min_history_years,
+                min_history_years=hard_filters.min_history_years,
             )
             financials = repo.get_financials(security.ticker)
             valuation = compute_valuation(
@@ -124,9 +125,7 @@ def analyze_market(
             # 가격 필터와 재무 필터가 모두 INSUFFICIENT_HISTORY를 낼 수 있다.
             # dict.fromkeys로 순서를 지키면서 중복만 없앤다 - 화면이 같은
             # 사유를 두 번 보여주면 안 된다.
-            financial_outcome = apply_financial_filters(
-                financials, config.hard_filters
-            )
+            financial_outcome = apply_financial_filters(financials, hard_filters)
             outcome = FilterOutcome(failures=list(dict.fromkeys(
                 outcome.failures + financial_outcome.failures
             )))

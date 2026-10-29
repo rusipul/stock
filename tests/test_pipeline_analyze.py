@@ -653,3 +653,27 @@ def test_analyze_grades_a_fallen_quality_stock(repo):
 
     assert row["score_total"] >= 70
     assert row["signal_grade"] == "STRONG"
+
+
+def test_analyze_uses_the_markets_hard_filters(repo):
+    """미국은 부채비율 필터를 끈다. 같은 재무가 한국에서는 HIGH_DEBT다."""
+    for ticker, market in (("005930.KS", "KR"), ("AAPL", "US")):
+        seed(repo, ticker, market=market)
+        repo.save_financials([
+            Financials(ticker=ticker, fiscal_year=y, currency="KRW",
+                       revenue=1_000.0, operating_income=150.0, net_income=120.0,
+                       total_assets=2_000.0, total_liabilities=3_000.0,
+                       total_equity=1_000.0, current_assets=800.0,
+                       current_liabilities=400.0, interest_expense=10.0,
+                       operating_cash_flow=180.0, capex=30.0)
+            for y in HEALTHY_YEARS
+        ])
+    config = cfg(hard_filters_by_market={"US": {"max_debt_ratio": float("inf")}})
+
+    kr = analyze_market(repo, market="KR", config=config)
+    us = analyze_market(repo, market="US", config=config)
+
+    (kr_row,) = repo.get_analysis_results(kr.snapshot_id)
+    (us_row,) = repo.get_analysis_results(us.snapshot_id)
+    assert "HIGH_DEBT" in json.loads(kr_row["filter_failures"])
+    assert "HIGH_DEBT" not in json.loads(us_row["filter_failures"])
