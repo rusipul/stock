@@ -110,3 +110,47 @@ def test_an_empty_payload_is_all_missing_not_an_error():
     fin = normalize_edgar_statement(stmt({}))
 
     assert not fin.has_required
+
+
+# --- 실측 40종목에서 더한 태그 (설계서 §18.4) ----------------------------
+
+
+def test_interest_and_debt_expense_is_interest_expense():
+    """BA·HON은 InterestAndDebtExpense로 보고한다. 이자비용과 같은 개념이다."""
+    fin = normalize_edgar_statement(stmt({"InterestAndDebtExpense": 2725.0}))
+
+    assert fin.interest_expense == 2725.0
+    assert fin.proxy_fields == []
+
+
+def test_interest_paid_is_not_interest_expense():
+    """CAT·GE에는 InterestPaidNet(현금 지급액)뿐이다. 뜻이 달라 쓰지 않는다."""
+    assert normalize_edgar_statement(
+        stmt({"InterestPaidNet": 1738.0})).interest_expense is None
+
+
+def test_other_productive_assets_is_capex():
+    """VZ의 설비투자는 PaymentsToAcquireOtherProductiveAssets로 온다."""
+    assert normalize_edgar_statement(
+        stmt({"PaymentsToAcquireOtherProductiveAssets": 17090.0})).capex == 17090.0
+
+
+def test_weighted_average_shares_are_a_marked_proxy():
+    """META·NKE·EL·UPS는 주식 클래스가 여럿이라 회사 전체 기말 주식수가 없다.
+
+    기본 EPS의 분모인 가중평균 주식수로 대신하고, 대체값으로 표시한다.
+    """
+    fin = normalize_edgar_statement(stmt({
+        "WeightedAverageNumberOfSharesOutstandingBasic": 2521.0}))
+
+    assert fin.shares_outstanding == 2521.0
+    assert fin.proxy_fields == ["shares_outstanding"]
+
+
+def test_reported_shares_win_over_the_weighted_average():
+    fin = normalize_edgar_statement(stmt({
+        "CommonStockSharesOutstanding": 100.0,
+        "WeightedAverageNumberOfSharesOutstandingBasic": 105.0}))
+
+    assert fin.shares_outstanding == 100.0
+    assert fin.proxy_fields == []

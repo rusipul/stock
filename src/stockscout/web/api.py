@@ -396,9 +396,14 @@ def _proxy_lines(financials: list[Financials]) -> list[str]:
     금융비용은 이자비용에 환차손·파생손실이 더해진 상위 개념이라 배율이
     실제보다 낮게 나온다.
     """
-    if not financials or "interest_expense" not in financials[-1].proxy_fields:
+    if not financials:
         return []
-    return [
-        "이자비용을 찾지 못해 금융비용으로 대신했습니다. "
-        "이자보상배율이 실제보다 낮게 계산됩니다"
-    ]
+    proxies = financials[-1].proxy_fields
+    lines = []
+    if "interest_expense" in proxies:
+        lines.append("이자비용을 찾지 못해 금융비용으로 대신했습니다. "
+                     "이자보상배율이 실제보다 낮게 계산됩니다")
+    if "shares_outstanding" in proxies:
+        lines.append("기말 주식수를 찾지 못해 가중평균 주식수로 대신했습니다. "
+                     "시가총액·PBR은 근사값입니다")
+    return lines

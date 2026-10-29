@@ -39,6 +39,7 @@ TAG_MAP: dict[str, list[str]] = {
         "InterestExpense",
         "InterestExpenseNonoperating",
         "InterestExpenseDebt",
+        "InterestAndDebtExpense",    # BA·HON (실측 §18.4)
     ],
     "operating_cash_flow": [
         "NetCashProvidedByUsedInOperatingActivities",
@@ -47,6 +48,7 @@ TAG_MAP: dict[str, list[str]] = {
     "capex": [
         "PaymentsToAcquirePropertyPlantAndEquipment",
         "PaymentsToAcquireProductiveAssets",
+        "PaymentsToAcquireOtherProductiveAssets",   # VZ (실측 §18.4)
     ],
     # 미국의 발행주식수는 자기주식을 뺀 유통주식수다(§18.2). 재무상태표
     # 값이 없으면 10-K 표지 값을 쓴다.
@@ -60,6 +62,12 @@ TAG_MAP: dict[str, list[str]] = {
 ABS_FIELDS = {"capex", "interest_expense"}
 
 LIABILITIES_AND_EQUITY = "LiabilitiesAndStockholdersEquity"
+
+# 기말 주식수가 없을 때의 대체값. 주식 클래스가 여럿인 회사(META·NKE·
+# EL·UPS)는 클래스별로만 보고해 companyfacts에 회사 전체 값이 없다.
+# 기본 EPS의 분모라 PER에는 정의대로 맞고, 시가총액·PBR에는 근사값이다.
+# 그래서 proxy_fields에 남겨 화면이 근거에 밝힌다 (한국 §17.3과 같다).
+SHARES_PROXY = "WeightedAverageNumberOfSharesOutstandingBasic"
 
 
 def pick(facts: dict[str, float], tags: list[str]) -> float | None:
@@ -88,9 +96,15 @@ def normalize_edgar_statement(stmt: RawStatement) -> Financials:
         if total is not None and values["total_equity"] is not None:
             values["total_liabilities"] = float(total) - values["total_equity"]
 
+    proxies: list[str] = []
+    if values["shares_outstanding"] is None and facts.get(SHARES_PROXY) is not None:
+        values["shares_outstanding"] = float(facts[SHARES_PROXY])
+        proxies.append("shares_outstanding")
+
     return Financials(
         ticker=stmt.ticker,
         fiscal_year=stmt.fiscal_year,
         currency="USD",
+        proxy_fields=proxies,
         **values,
     )
