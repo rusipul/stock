@@ -272,6 +272,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_srv.add_argument("--host", default="127.0.0.1")
     p_srv.add_argument("--port", type=int, default=8000)
 
+    p_bt = sub.add_parser(
+        "backtest", help="과거 시점마다 신호를 내고 이후 성과를 잰다 (기준 검증)")
+    p_bt.add_argument("--market", default="KR", choices=["KR", "US"])
+    p_bt.add_argument("--step", type=int, default=5, help="평가 간격 (거래일)")
+
     p_exp = sub.add_parser(
         "export", help="최신 스냅샷을 정적 사이트로 내보낸다 (Vercel 등에 올린다)")
     p_exp.add_argument("--out", default="site", help="내보낼 폴더 (기본: site)")
@@ -336,6 +341,12 @@ def main(argv: list[str] | None = None) -> int:
 
         elif args.command == "serve":
             serve(args.db, host=args.host, port=args.port)
+
+        elif args.command == "backtest":
+            from stockscout.pipeline.backtest import backtest_market
+
+            print(backtest_market(repo, market=args.market, config=config,
+                                  step_days=args.step).render())
 
         elif args.command == "export":
             # web/은 무거운 import(fastapi)라 serve처럼 필요할 때만 불러온다.

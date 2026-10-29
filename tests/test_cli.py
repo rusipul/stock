@@ -633,3 +633,12 @@ def test_resolve_tickers_finds_a_kosdaq_code(repo, capsys):
 
     assert resolve_tickers(repo, market="KR", tickers=["247540"]) == ["247540.KQ"]
     assert "알 수 없는" not in capsys.readouterr().out
+
+
+def test_backtest_command_prints_the_report(tmp_path, capsys):
+    db = tmp_path / "t.db"
+    code = main(["--db", str(db), "--config", "config/settings.yaml",
+                 "backtest", "--market", "KR"])
+
+    assert code == 0
+    assert "생존자 편향" in capsys.readouterr().out
