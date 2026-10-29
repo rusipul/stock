@@ -83,6 +83,7 @@ class SecurityRow(BaseModel):
     score_stability: float | None = None
     score_cashflow: float | None = None
     weak_axes: list[str] = []
+    fcf_yield: float | None = None
 
     score_total: float | None
     market_cap: float | None

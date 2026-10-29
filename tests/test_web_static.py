@@ -567,3 +567,10 @@ def test_a_weak_axis_blocks_the_grade_on_screen_too():
     weak = dict(_row(), weak_axes=["stability"])
 
     assert _run_grade_cases([_row(), weak]) == ["STRONG", None]
+
+
+
+def test_the_detail_shows_valuation_including_fcf_yield():
+    body = _function_body(js_text(), "renderDetail")
+
+    assert "fcf_yield" in body and "per" in body and "pbr" in body

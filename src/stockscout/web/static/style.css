@@ -259,3 +259,6 @@ table.fin th:first-child, table.fin td:first-child { text-align: left; }
   white-space: nowrap;   /* 좁은 화면에서 '한/국'으로 쪼개지지 않게 */
 }
 #market-tabs .tab.on { background: #e2e8f0; color: #2d3748; border-color: #e2e8f0; }
+
+/* 가치평가 한 줄 */
+.valuation { color: var(--muted); font-size: 13px; margin: -8px 0 16px; }

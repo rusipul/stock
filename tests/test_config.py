@@ -381,3 +381,11 @@ def test_real_settings_turn_off_the_debt_filter_for_us_only():
 
     assert math.isinf(config.hard_filters_for("US").max_debt_ratio)
     assert config.hard_filters_for("KR").max_debt_ratio == 200
+
+
+
+def test_real_settings_set_a_trading_value_floor_per_market():
+    config = load_config()
+
+    assert config.hard_filters_for("KR").min_trading_value == 1_000_000_000
+    assert config.hard_filters_for("US").min_trading_value == 20_000_000

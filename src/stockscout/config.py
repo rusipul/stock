@@ -87,6 +87,9 @@ class HardFilterConfig(BaseModel):
     interest_coverage_years: int = Field(default=2, ge=1)
     max_revenue_decline_3y: float = -0.5
     min_history_years: int = Field(default=5, ge=1)
+    # 최근 20거래일 평균 거래대금 하한(현지 통화). None이면 보지 않는다.
+    # 시장마다 단위가 달라 hard_filters_by_market에서 정한다.
+    min_trading_value: float | None = None
 
 
 class MetricConfig(BaseModel):

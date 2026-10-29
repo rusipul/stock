@@ -310,6 +310,7 @@ def _axis_fields(row) -> dict:
         "score_stability": row.get("score_stability"),
         "score_cashflow": row.get("score_cashflow"),
         "weak_axes": json.loads(row.get("weak_axes") or "[]"),
+        "fcf_yield": row.get("fcf_yield"),
     }
 
 

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -149,3 +149,40 @@ def test_the_earliest_bar_lookup_moved_to_the_repository():
     )
 
     assert INSUFFICIENT_HISTORY not in outcome.failures
+
+
+
+# --- 거래대금 하한 --------------------------------------------------------
+
+from stockscout.analysis.filters import LOW_TRADING_VALUE, apply_trading_value_filter  # noqa: E402
+from stockscout.models import PriceBar  # noqa: E402
+
+
+def _bars(value_per_day, n=30):
+    """하루 거래대금이 value_per_day인 봉 n개 (종가 100)."""
+    return [PriceBar(ticker="X", date=date(2026, 1, 1) + timedelta(days=i), close=100.0,
+                     volume=int(value_per_day / 100)) for i in range(n)]
+
+
+def test_thin_trading_is_excluded():
+    assert apply_trading_value_filter(_bars(5e8), 1e9) == [LOW_TRADING_VALUE]
+
+
+def test_enough_trading_passes():
+    assert apply_trading_value_filter(_bars(2e9), 1e9) == []
+
+
+def test_no_threshold_or_no_volume_skips_the_check():
+    assert apply_trading_value_filter(_bars(5e8), None) == []
+    no_volume = [b.model_copy(update={"volume": None}) for b in _bars(5e8)]
+    assert apply_trading_value_filter(no_volume, 1e9) == []
+
+
+def test_only_the_last_twenty_bars_count():
+    """오래전에 거래가 많았어도 지금 거래가 말랐으면 제외한다."""
+    old = _bars(5e9, n=80)
+    recent = [b.model_copy(update={"date": b.date + timedelta(days=80)})
+              for b in _bars(1e8, n=20)]
+    bars = old + recent
+
+    assert apply_trading_value_filter(bars, 1e9) == [LOW_TRADING_VALUE]

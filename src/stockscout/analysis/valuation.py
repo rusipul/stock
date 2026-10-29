@@ -145,7 +145,13 @@ def compute_valuation(price: float, latest: Financials | None) -> Valuation:
         if bps > 0:
             pbr = price / bps
 
-    return Valuation(market_cap=market_cap, per=per, pbr=pbr)
+    # FCF 수익률. 많이 떨어졌어도 여전히 비쌀 수 있다 - 현금 창출력 대비
+    # 가격을 본다. 설비투자를 모르면 영업현금흐름만으로 부풀리지 않고 None.
+    fcf_yield = None
+    if latest.operating_cash_flow is not None and latest.capex is not None and market_cap > 0:
+        fcf_yield = (latest.operating_cash_flow - latest.capex) / market_cap
+
+    return Valuation(market_cap=market_cap, per=per, pbr=pbr, fcf_yield=fcf_yield)
 
 
 # --- 단기 하락 (최근 N개월) ------------------------------------------------
@@ -201,7 +207,9 @@ def compute_drawdowns(
         low_at = min(range(len(after_high)), key=lambda i: (after_high[i].close, i))
         days_since_low = len(after_high) - 1 - low_at
         high = window[high_at].close
+        start_close = window[0].close
         out[n] = DrawdownStat(
+            period_return=current / start_close - 1 if start_close > 0 else None,
             high=high,
             drop_from_high=current / high - 1 if high > 0 else 0.0,
             low=after_high[low_at].close,

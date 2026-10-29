@@ -24,6 +24,24 @@ REVENUE_COLLAPSE = "REVENUE_COLLAPSE"
 # 1년 안에 갚을 차입금 > 현금 + 1년 영업현금흐름. 과거 흑자여도 만기 부채를
 # 당장 갚지 못할 수 있다. 차환(롤오버)이 막히면 우량주도 무너진다.
 LIQUIDITY_SHORTFALL = "LIQUIDITY_SHORTFALL"
+# 최근 20거래일 평균 거래대금이 하한 미만. 계산상 수익과 실제 매매 수익의
+# 차이(호가 공백·체결 불가)를 줄인다.
+LOW_TRADING_VALUE = "LOW_TRADING_VALUE"
+TRADING_VALUE_DAYS = 20
+
+
+def apply_trading_value_filter(bars, min_value: float | None) -> list[str]:
+    """최근 TRADING_VALUE_DAYS 봉의 평균 거래대금(종가 x 거래량)이 하한 미만이면 실패.
+
+    하한이 없거나 거래량을 모르면 건너뛴다 (모르는 것으로 떨어뜨리지 않는다).
+    """
+    if min_value is None:
+        return []
+    recent = sorted(bars, key=lambda b: b.date)[-TRADING_VALUE_DAYS:]
+    values = [b.close * b.volume for b in recent if b.volume is not None]
+    if not values:
+        return []
+    return [LOW_TRADING_VALUE] if sum(values) / len(values) < min_value else []
 DATA_INSUFFICIENT = "DATA_INSUFFICIENT"
 ADVERSE_AUDIT_OPINION = "ADVERSE_AUDIT_OPINION"
 

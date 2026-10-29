@@ -12,7 +12,11 @@ from datetime import date, datetime, timezone
 
 from pydantic import BaseModel
 
-from stockscout.analysis.filters import apply_financial_filters, apply_price_filters
+from stockscout.analysis.filters import (
+    apply_financial_filters,
+    apply_price_filters,
+    apply_trading_value_filter,
+)
 from stockscout.analysis.grading import grade_signal, weak_axes
 from stockscout.analysis.scoring import score_security
 from stockscout.analysis.valuation import (
@@ -155,6 +159,7 @@ def analyze_market(
             financial_outcome = apply_financial_filters(financials, hard_filters)
             outcome = FilterOutcome(failures=list(dict.fromkeys(
                 outcome.failures + financial_outcome.failures
+                + apply_trading_value_filter(bars, hard_filters.min_trading_value)
             )))
 
             # 하드필터에 걸린 종목은 점수를 계산하지 않는다 (설계서 §8.1).

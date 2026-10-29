@@ -102,3 +102,13 @@ def test_touching_the_same_low_again_is_not_a_new_low():
     dd = compute_drawdowns(series(closes), as_of=AS_OF, months=[3])
 
     assert dd[3].days_since_low == 10
+
+
+
+def test_the_period_return_is_measured_from_the_first_bar_of_the_window():
+    """고점 대비 낙폭과 별개로, 기간 첫날 대비 단순 수익률도 남긴다."""
+    closes = [80.0] + [100.0] * 30 + [60.0]
+    dd = compute_drawdowns(series(closes), as_of=AS_OF, months=[3])
+
+    assert dd[3].period_return == pytest.approx(60 / 80 - 1)
+    assert dd[3].drop_from_high == pytest.approx(60 / 100 - 1)

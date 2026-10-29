@@ -388,6 +388,20 @@ function renderDetail(d, prices) {
   ].join("");
   panel.appendChild(kpis);
 
+  // 가치평가. 많이 떨어졌어도 여전히 비쌀 수 있다. 점수에는 넣지 않는다(§8.2).
+  const val = document.createElement("p");
+  val.className = "valuation";
+  const ratio = (v) => (v === null || v === undefined) ? "—" : v.toFixed(1) + "배";
+  val.textContent = [
+    `시가총액 ${amount(d.market_cap)}`,
+    `PER ${ratio(d.per)}`,
+    `PBR ${ratio(d.pbr)}`,
+    `FCF 수익률 ${pct(d.fcf_yield)}`,
+    dd && dd.period_return !== null && dd.period_return !== undefined
+      ? `${state.months}개월 수익률 ${pct(dd.period_return)}` : null,
+  ].filter(Boolean).join(" · ");
+  panel.appendChild(val);
+
   // 점수 분해 (설계서 §11.2). 제외된 종목은 채점하지 않았으므로 막대가 없다.
   if (d.score_detail) {
     panel.appendChild(sectionTitle("점수 분해"));

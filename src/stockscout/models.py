@@ -223,6 +223,7 @@ class DrawdownStat(BaseModel):
     above_ma: bool                # 현재가 >= 이동평균(기본 20거래일)
     stabilized: bool              # 저점 이후 일정 거래일 경과 또는 이동평균 회복
     market_drop: float | None = None   # 같은 기간 시장 지수의 고점 대비 하락
+    period_return: float | None = None  # 기간 첫 봉 대비 단순 수익률
 
 
 class PriceStats(BaseModel):
@@ -255,6 +256,7 @@ class Valuation(BaseModel):
     market_cap: float | None = None
     per: float | None = None
     pbr: float | None = None
+    fcf_yield: float | None = None     # (영업현금흐름 - 설비투자) / 시가총액
 
 
 class Snapshot(BaseModel):

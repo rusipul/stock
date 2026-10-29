@@ -7,7 +7,7 @@ universe:
 lookback:
   price_years: [1, 2, 3, 4, 5]   # 화면의 비교 기간 슬라이더가 1년 단위로 쓴다
   primary_window: 5
-  financial_years: 5
+  financial_years: 10   # 백테스트가 그 시점의 5년 이력을 쓰려면 10년이 필요하다
   min_data_coverage: 0.8
 
 hard_filters:
@@ -24,8 +24,11 @@ hard_filters:
 # 정책의 결과라 하드필터에서는 끈다(.inf). 점수의 안정성 축 부채비율
 # 지표는 그대로 남는다.
 hard_filters_by_market:
+  KR:
+    min_trading_value: 1000000000     # 하루 평균 거래대금 10억 원
   US:
     max_debt_ratio: .inf
+    min_trading_value: 20000000       # 하루 평균 거래대금 2천만 달러
 
 scoring:
   profitability:

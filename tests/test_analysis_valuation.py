@@ -449,3 +449,19 @@ def test_the_five_year_high_matches_its_window_entry():
                                 calendar=[b.date for b in series], min_coverage=0.0)
 
     assert stats.high_by_window[5] == stats.high_5y == 500.0
+
+
+
+def test_fcf_yield_is_free_cash_flow_over_market_cap():
+    fin = Financials(ticker="X", fiscal_year=2025, currency="KRW",
+                     shares_outstanding=100.0, operating_cash_flow=500.0, capex=200.0)
+
+    v = compute_valuation(10.0, fin)   # 시가총액 1,000
+
+    assert v.fcf_yield == pytest.approx(0.3)
+
+
+def test_fcf_yield_is_none_without_cash_flow():
+    fin = Financials(ticker="X", fiscal_year=2025, currency="KRW", shares_outstanding=100.0)
+
+    assert compute_valuation(10.0, fin).fcf_yield is None
