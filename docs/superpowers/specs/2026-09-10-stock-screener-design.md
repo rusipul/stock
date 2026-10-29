@@ -940,8 +940,10 @@ python -m stockscout run                        # universe → collect → analy
   (DART의 corp_code와 같은 방식). 티커 표기는 `BRK.B` ↔ `BRK-B`를 맞춘다
 - 회사당 `companyfacts` 1회로 전 연도를 받는다. 어댑터가 연도별로 잘라
   `RawStatement`로 돌려주므로 `FundamentalSource` 인터페이스는 그대로다.
-  `raw_financials`에 `source='edgar'`로 저장한다. 원본 전체가 아니라
-  **매핑 후보 태그만** 담는다(전체는 회사당 수백 KB다)
+  `raw_financials`에 `source='edgar'`로 저장한다. 원본 전체(회사당 수백
+  KB, 분기·비교 수치 포함)가 아니라 **연간 값 전체**를 담는다 - AAPL 한
+  해가 10KB(태그 약 200개)다. 후보 태그만 담으면 매핑에 태그를 더할
+  때마다 SEC에서 다시 받아야 한다
 - 연간 값 고르기:
   - 대상 form: `10-K`, `10-K/A`
   - 흐름 항목: 기간 350~380일
