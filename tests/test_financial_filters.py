@@ -414,3 +414,40 @@ def test_max_revenue_decline_3y_comes_from_config():
     assert REVENUE_COLLAPSE in apply_financial_filters(
         years, HardFilterConfig(max_revenue_decline_3y=-0.2)
     ).failures
+
+
+
+# --- 12개월 자금 여력 -----------------------------------------------------
+
+from stockscout.analysis.filters import LIQUIDITY_SHORTFALL  # noqa: E402
+
+
+def test_short_term_debt_beyond_cash_and_cash_flow_is_caught():
+    """1년 안에 갚을 차입금이 현금 + 1년 영업현금흐름보다 크다."""
+    years = five_years()
+    years[-1] = fin(2025, cash=50.0, short_term_debt=300.0, operating_cash_flow=120.0)
+
+    assert LIQUIDITY_SHORTFALL in apply_financial_filters(years, CONFIG).failures
+
+
+def test_cash_plus_cash_flow_covering_the_debt_passes():
+    years = five_years()
+    years[-1] = fin(2025, cash=200.0, short_term_debt=300.0, operating_cash_flow=120.0)
+
+    assert LIQUIDITY_SHORTFALL not in apply_financial_filters(years, CONFIG).failures
+
+
+def test_negative_cash_flow_does_not_count_as_a_resource():
+    """영업현금흐름이 적자면 갚을 재원이 아니라 오히려 현금을 쓴다. 0으로 본다."""
+    years = five_years()
+    years[-1] = fin(2025, cash=250.0, short_term_debt=300.0, operating_cash_flow=-100.0)
+
+    assert LIQUIDITY_SHORTFALL in apply_financial_filters(years, CONFIG).failures
+
+
+def test_unknown_cash_or_debt_skips_the_check():
+    """모르는 것으로 떨어뜨리지 않는다."""
+    years = five_years()
+    years[-1] = fin(2025, cash=None, short_term_debt=900.0)
+
+    assert LIQUIDITY_SHORTFALL not in apply_financial_filters(years, CONFIG).failures

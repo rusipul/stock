@@ -125,6 +125,8 @@ class Financials(BaseModel):
     shares_outstanding: float | None = None
     dividend_per_share: float | None = None
     shares_treasury: float | None = None      # 자기주식수 (설계서 §9.2)
+    cash: float | None = None                 # 현금및현금성자산
+    short_term_debt: float | None = None      # 1년 안에 갚을 차입금·사채 (리스 제외)
     audit_opinion: str | None = None          # '적정' 등 원문 (설계서 §8.1)
 
     # 정확한 계정을 못 찾아 대체 계정으로 채운 필드 이름들 (설계서 §17.3).

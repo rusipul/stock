@@ -63,6 +63,27 @@ ABS_FIELDS = {"capex", "interest_expense"}
 
 LIABILITIES_AND_EQUITY = "LiabilitiesAndStockholdersEquity"
 
+# 마지막 후보는 현금흐름표의 기말 현금(사용 제한 현금 포함, 대개 작다).
+# 실측: CVX·PG·TGT 등 10곳은 재무상태표 현금 태그 없이 이것만 낸다.
+CASH_TAGS = ["CashAndCashEquivalentsAtCarryingValue", "CashAndCashEquivalents",
+             "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"]
+# 1년 안에 갚을 차입금. DebtCurrent는 이미 합계라 있으면 그것만 쓴다.
+# 단기차입(ShortTermBorrowings)은 대개 기업어음(CommercialPaper)을 포함하므로
+# 기업어음은 단기차입이 없을 때만 본다 - 함께 더하면 두 번 센다.
+DEBT_CURRENT_TOTAL = ["DebtCurrent"]
+SHORT_BORROWING_TAGS = ["ShortTermBorrowings", "CommercialPaper"]
+CURRENT_LONG_TERM_DEBT_TAGS = ["LongTermDebtCurrent",
+                               "LongTermDebtAndCapitalLeaseObligationsCurrent"]
+
+
+def short_term_debt(facts: dict[str, float]) -> float | None:
+    total = pick(facts, DEBT_CURRENT_TOTAL)
+    if total is not None:
+        return total
+    parts = [pick(facts, SHORT_BORROWING_TAGS), pick(facts, CURRENT_LONG_TERM_DEBT_TAGS)]
+    found = [p for p in parts if p is not None]
+    return sum(found) if found else None
+
 # 기말 주식수가 없을 때의 대체값. 주식 클래스가 여럿인 회사(META·NKE·
 # EL·UPS)는 클래스별로만 보고해 companyfacts에 회사 전체 값이 없다.
 # 기본 EPS의 분모라 PER에는 정의대로 맞고, 시가총액·PBR에는 근사값이다.
@@ -121,5 +142,7 @@ def normalize_edgar_statement(stmt: RawStatement) -> Financials:
         fiscal_year=stmt.fiscal_year,
         currency="USD",
         proxy_fields=proxies,
+        cash=pick(facts, CASH_TAGS),
+        short_term_debt=short_term_debt(facts),
         **values,
     )

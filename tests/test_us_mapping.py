@@ -191,3 +191,42 @@ def test_domestic_pretax_alone_is_not_used():
         "IncomeLossFromContinuingOperationsBeforeIncomeTaxesDomestic": 15.0}))
 
     assert fin.operating_income is None
+
+
+
+# --- 현금·단기차입금 (12개월 자금 여력) ------------------------------------
+
+
+def test_us_short_term_debt_sums_borrowings_and_current_long_term_debt():
+    fin = normalize_edgar_statement(stmt({
+        "CashAndCashEquivalentsAtCarryingValue": 500.0,
+        "ShortTermBorrowings": 100.0,
+        "CommercialPaper": 100.0,           # 대개 ShortTermBorrowings에 포함된다
+        "LongTermDebtCurrent": 40.0,
+    }))
+
+    assert fin.cash == 500.0
+    assert fin.short_term_debt == 140.0
+
+
+def test_us_debt_current_is_already_the_total():
+    fin = normalize_edgar_statement(stmt({"DebtCurrent": 90.0, "LongTermDebtCurrent": 40.0}))
+
+    assert fin.short_term_debt == 90.0
+
+
+def test_real_aapl_2025_has_cash_and_short_term_debt():
+    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    fin = normalize_edgar_statement(
+        RawStatement(ticker="AAPL", fiscal_year=2025, source="edgar", payload=payload))
+
+    assert fin.cash is not None and fin.cash > 0
+    assert fin.short_term_debt is not None and fin.short_term_debt > 0
+
+
+def test_cash_falls_back_to_the_cash_flow_ending_balance():
+    """실측: CVX는 재무상태표 현금 태그 없이 현금흐름표 기말 현금만 낸다."""
+    fin = normalize_edgar_statement(stmt({
+        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents": 7285.0}))
+
+    assert fin.cash == 7285.0

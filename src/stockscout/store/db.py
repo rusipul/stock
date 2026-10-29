@@ -105,6 +105,8 @@ def _add_financials_columns_if_missing(conn: sqlite3.Connection) -> None:
         ("shares_treasury", "REAL"),
         ("audit_opinion", "TEXT"),
         ("proxy_fields", "TEXT"),
+        ("cash", "REAL"),
+        ("short_term_debt", "REAL"),
     ):
         if name not in columns:
             conn.execute(f"ALTER TABLE financials ADD COLUMN {name} {sql_type}")

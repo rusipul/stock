@@ -70,6 +70,44 @@ ACCOUNT_MAP: dict[str, list[AccountTier]] = {
     )],
 }
 
+# 현금. 기말 잔액이라 재무상태표·현금흐름표 어디서 잡혀도 같은 값이다.
+CASH_ACCOUNT = (["ifrs-full_CashAndCashEquivalents"], ["현금및현금성자산"])
+
+# 1년 안에 갚을 차입금·사채 = 항목별 첫 매치의 합 (12개월 자금 여력 필터).
+# 실측(KOSPI·KOSDAQ 72종목): 표준계정코드가 회사마다 다르고 11개사는
+# '-표준계정코드 미사용-'에 이름만 단다. 그래서 이름 폴백이 필수다.
+# 리스부채는 넣지 않는다 - 차입이 아니라 사용권 계약이다.
+# 재무상태표(BS)에서만 찾는다. 현금흐름표의 '단기차입금'은 차입 증감이다.
+SHORT_TERM_DEBT_TOTAL = (
+    ["ifrs-full_CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings"], [])
+SHORT_TERM_DEBT_PARTS = [
+    (["ifrs-full_ShorttermBorrowings",
+      "ifrs-full_CurrentLoansReceivedAndCurrentPortionOfNoncurrentLoansReceived"],
+     ["단기차입금"]),
+    (["ifrs-full_CurrentPortionOfLongtermBorrowings"],
+     ["유동성장기부채", "유동성장기차입금", "유동성장기차입금및사채",
+      "유동성사채및장기차입금", "유동성장기채무"]),
+    (["ifrs-full_CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued",
+      "dart_CurrentPortionOfBonds"],
+     ["유동성사채", "단기사채"]),
+]
+
+
+def short_term_debt(items: list[dict]) -> float | None:
+    """재무상태표의 단기 차입금 합. 항목이 하나도 없으면 None(모른다).
+
+    합산 계정(CurrentBorrowingsAndCurrentPortionOf...)이 있으면 그것만 쓴다 -
+    세부 항목을 더하면 두 번 센다.
+    """
+    bs = [it for it in items if it.get("sj_div") == "BS"]
+    total = pick_amount(bs, *SHORT_TERM_DEBT_TOTAL)
+    if total is not None:
+        return total
+    parts = [pick_amount(bs, ids, names) for ids, names in SHORT_TERM_DEBT_PARTS]
+    found = [p for p in parts if p is not None]
+    return sum(found) if found else None
+
+
 # 값을 양수 크기로 저장할 필드 (DART 현금흐름표는 지출을 음수로 표기한다)
 ABS_FIELDS = {"capex", "interest_expense"}
 
@@ -149,6 +187,8 @@ def normalize_dart_statement(stmt: RawStatement) -> Financials:
         fiscal_year=stmt.fiscal_year,
         currency="KRW",
         proxy_fields=proxies,
+        cash=pick_amount(items, *CASH_ACCOUNT),
+        short_term_debt=short_term_debt(items),
         **values,
     )
 

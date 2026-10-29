@@ -21,6 +21,9 @@ CONSECUTIVE_LOSS = "CONSECUTIVE_LOSS"
 HIGH_DEBT = "HIGH_DEBT"
 INTEREST_UNCOVERED = "INTEREST_UNCOVERED"
 REVENUE_COLLAPSE = "REVENUE_COLLAPSE"
+# 1년 안에 갚을 차입금 > 현금 + 1년 영업현금흐름. 과거 흑자여도 만기 부채를
+# 당장 갚지 못할 수 있다. 차환(롤오버)이 막히면 우량주도 무너진다.
+LIQUIDITY_SHORTFALL = "LIQUIDITY_SHORTFALL"
 DATA_INSUFFICIENT = "DATA_INSUFFICIENT"
 ADVERSE_AUDIT_OPINION = "ADVERSE_AUDIT_OPINION"
 
@@ -178,6 +181,13 @@ def apply_financial_filters(
         if base is not None and base > 0 and now is not None:
             if now / base - 1 <= config.max_revenue_decline_3y:
                 failures.append(REVENUE_COLLAPSE)
+
+    # 12개월 자금 여력. 현금이나 단기차입금을 모르면 건너뛴다. 영업현금흐름
+    # 적자는 재원이 아니므로 0으로 본다.
+    if latest.cash is not None and latest.short_term_debt is not None:
+        resources = latest.cash + max(latest.operating_cash_flow or 0.0, 0.0)
+        if latest.short_term_debt > resources:
+            failures.append(LIQUIDITY_SHORTFALL)
 
     if is_adverse_opinion(latest.audit_opinion):
         failures.append(ADVERSE_AUDIT_OPINION)

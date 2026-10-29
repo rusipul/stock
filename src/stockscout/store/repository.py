@@ -207,7 +207,7 @@ class Repository:
         "net_income", "total_assets", "total_liabilities", "total_equity",
         "current_assets", "current_liabilities", "interest_expense",
         "operating_cash_flow", "capex", "shares_outstanding", "dividend_per_share",
-        "shares_treasury", "audit_opinion",
+        "shares_treasury", "audit_opinion", "cash", "short_term_debt",
     )
 
     def save_financials(self, records: list[Financials]) -> None:

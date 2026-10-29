@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS financials (
   audit_opinion       TEXT,
   proxy_fields        TEXT,
   missing_fields      TEXT,
+  cash                REAL,
+  short_term_debt     REAL,
   PRIMARY KEY (ticker, fiscal_year)
 );
 

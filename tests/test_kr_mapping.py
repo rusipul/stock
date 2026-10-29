@@ -610,3 +610,60 @@ def test_audit_opinion_strips_stray_leading_whitespace():
     assert parse_audit_opinion(
         {"list": [audit_row("제48기(당기)", " 적정의견")]}
     ) == "적정의견"
+
+
+
+# --- 현금·단기차입금 (12개월 자금 여력) ------------------------------------
+
+
+def _bs(*rows):
+    return RawStatement(ticker="X.KS", fiscal_year=2025, source="dart",
+                        payload={"list": [item("BS", i, n, a) for i, n, a in rows]})
+
+
+def test_short_term_debt_sums_borrowings_current_portions_and_bonds():
+    from stockscout.normalize.kr_mapping import normalize_dart_statement
+
+    fin = normalize_dart_statement(_bs(
+        ("ifrs-full_CashAndCashEquivalents", "현금및현금성자산", "500"),
+        ("ifrs-full_ShorttermBorrowings", "단기차입금", "100"),
+        ("ifrs-full_CurrentPortionOfLongtermBorrowings", "유동성장기부채", "40"),
+        ("ifrs-full_CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued", "유동성사채", "10"),
+        ("ifrs-full_CurrentLeaseLiabilities", "유동리스부채", "999"),   # 리스는 차입금이 아니다
+    ))
+
+    assert fin.cash == 500.0
+    assert fin.short_term_debt == 150.0
+
+
+def test_unstandardized_account_codes_match_by_name():
+    """실측: 11개사가 '-표준계정코드 미사용-'으로 단기차입금을 보고한다."""
+    from stockscout.normalize.kr_mapping import normalize_dart_statement
+
+    fin = normalize_dart_statement(_bs(
+        ("-표준계정코드 미사용-", "단기차입금", "70"),
+        ("-표준계정코드 미사용-", "유동성장기차입금", "30"),
+    ))
+
+    assert fin.short_term_debt == 100.0
+
+
+def test_a_combined_current_borrowings_account_is_not_double_counted():
+    from stockscout.normalize.kr_mapping import normalize_dart_statement
+
+    fin = normalize_dart_statement(_bs(
+        ("ifrs-full_CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings", "단기차입금", "120"),
+        ("ifrs-full_CurrentPortionOfLongtermBorrowings", "유동성장기부채", "40"),
+    ))
+
+    assert fin.short_term_debt == 120.0
+
+
+def test_cash_flow_statement_rows_are_not_borrowings():
+    """현금흐름표의 '단기차입금'(차입 증감)은 잔액이 아니다."""
+    from stockscout.normalize.kr_mapping import normalize_dart_statement
+
+    stmt = RawStatement(ticker="X.KS", fiscal_year=2025, source="dart", payload={"list": [
+        item("CF", "-표준계정코드 미사용-", "단기차입금", "999")]})
+
+    assert normalize_dart_statement(stmt).short_term_debt is None
