@@ -13,6 +13,7 @@ from datetime import date
 import httpx
 
 from stockscout.models import Filing, RawStatement
+from stockscout.normalize.filings import US_KEPT_FORMS
 from stockscout.sources.base import FatalSourceError, PermanentSourceError
 from stockscout.sources.ratelimit import TokenBucket
 
@@ -94,6 +95,71 @@ def _matches(tag: str, entry: dict, year_end: date) -> bool:
     return end == year_end
 
 
+INTERIM_FORMS = {"10-Q", "10-Q/A"}
+MIN_INTERIM_DAYS = 80      # 한 분기 이상
+MAX_INTERIM_DAYS = 290     # 9개월 누적까지
+PRIOR_YEAR_TOLERANCE_DAYS = 10
+
+
+def interim_facts(companyfacts: dict) -> dict | None:
+    """가장 최근 10-Q의 누적(연초부터) 값과 전년 같은 기간 값.
+
+    10-Q에는 분기 값과 누적 값이 함께 온다. 같은 결산일이면 기간이 가장 긴
+    것(누적)을 쓴다. 전년 동기는 결산일이 1년 전(±10일)이고 기간 길이가
+    같은(±15일) 항목이다. 가장 최근 10-K보다 오래된 10-Q면 이미 연간에
+    들어갔으므로 None이다.
+    """
+    def entries(namespace_tags):
+        for namespace in NAMESPACES:
+            for tag, body in companyfacts.get("facts", {}).get(namespace, {}).items():
+                for unit in UNITS:
+                    if unit in body.get("units", {}):
+                        yield tag, body["units"][unit]
+                        break
+
+    def days(e):
+        return (_date(e["end"]) - _date(e["start"])).days
+
+    by_tag: dict[str, list[dict]] = {}
+    latest_annual = date.min
+    for tag, items in entries(None):
+        for e in items:
+            if not e.get("start"):
+                continue
+            if e.get("form") in ANNUAL_FORMS and _is_annual_period(e):
+                latest_annual = max(latest_annual, _date(e["end"]))
+            if MIN_INTERIM_DAYS <= days(e) <= MAX_INTERIM_DAYS:
+                by_tag.setdefault(tag, []).append(e)
+
+    interim = [e for items in by_tag.values() for e in items
+               if e.get("form") in INTERIM_FORMS]
+    if not interim:
+        return None
+    end = max(_date(e["end"]) for e in interim)
+    if end <= latest_annual:
+        return None
+
+    current: dict[str, float] = {}
+    prior: dict[str, float] = {}
+    span = 0
+    for tag, items in by_tag.items():
+        at_end = [e for e in items if _date(e["end"]) == end
+                  and e.get("form") in INTERIM_FORMS]
+        if not at_end:
+            continue
+        best = max(at_end, key=lambda e: (days(e), e.get("filed", "")))
+        current[tag] = best["val"]
+        span = max(span, days(best))
+        target = date(end.year - 1, end.month, min(end.day, 28))
+        olds = [e for e in items
+                if abs((_date(e["end"]) - target).days) <= PRIOR_YEAR_TOLERANCE_DAYS + 3
+                and abs(days(e) - days(best)) <= 15]
+        if olds:
+            prior[tag] = max(olds, key=lambda e: e.get("filed", ""))["val"]
+    return {"period_end": end.isoformat(), "months": round(span / 30.4),
+            "current": current, "prior": prior}
+
+
 def annual_facts(companyfacts: dict) -> dict[int, dict]:
     """companyfacts -> {회계연도: {"period_end": ISO 날짜, "facts": {태그: 값}}}.
 
@@ -167,6 +233,8 @@ class EdgarSource:
         self._client = client or httpx.Client(timeout=30)
         self._retry_delay = 1.0
         self.ciks: dict[str, int] = {}
+        # fetch_annual이 받은 companyfacts. fetch_interim이 다시 받지 않게 한다.
+        self._facts_cache: dict[str, dict] = {}
         # SEC 티커 목록보다 먼저 본다. 지주사 전환 등으로 목록의 CIK가
         # 아직 10-K가 없는 회사를 가리킬 때 쓴다 (실측: XOM, 설계서 §18.4).
         self.cik_overrides = {k.upper(): v for k, v in (cik_overrides or {}).items()}
@@ -189,7 +257,7 @@ class EdgarSource:
         out: list[Filing] = []
         for i, form in enumerate(recent.get("form", [])):
             filed = date.fromisoformat(recent["filingDate"][i])
-            if not since <= filed <= until:
+            if not since <= filed <= until or form not in US_KEPT_FORMS:
                 continue
             accession = recent["accessionNumber"][i].replace("-", "")
             doc = recent.get("primaryDocument", [""] * (i + 1))[i]
@@ -203,10 +271,23 @@ class EdgarSource:
             ))
         return out
 
+    def fetch_interim(self, ticker: str, year: int) -> list[RawStatement]:
+        """가장 최근 10-Q의 누적과 전년 동기. 10-K가 더 최근이면 빈 목록."""
+        facts = self._facts_cache.get(ticker.upper())
+        if facts is None:
+            facts = self._get_json(FACTS_URL.format(cik=self._cik(ticker)))
+        payload = interim_facts(facts)
+        if payload is None:
+            return []
+        return [RawStatement(ticker=ticker, fiscal_year=int(payload["period_end"][:4]),
+                             source="edgar_interim", payload=payload)]
+
     def fetch_annual(self, ticker: str, years: list[int]) -> list[RawStatement]:
         cik = self._cik(ticker)
 
-        by_year = annual_facts(self._get_json(FACTS_URL.format(cik=cik)))
+        companyfacts = self._get_json(FACTS_URL.format(cik=cik))
+        self._facts_cache[ticker.upper()] = companyfacts
+        by_year = annual_facts(companyfacts)
         if not by_year:
             # 빈 목록을 조용히 돌려주면 collect_errors에 흔적이 남지 않는다.
             # 실측: XOM은 신설 지주사(CIK 2115436)로 옮겨 아직 10-K가 없다.

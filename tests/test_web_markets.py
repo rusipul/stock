@@ -226,3 +226,37 @@ def test_detail_lists_recent_filings_with_their_category(db):
 
     assert [(f["filed"], f["category"]) for f in body["filings"]] == [
         ("2026-09-01", "EARNINGS"), ("2026-08-01", "RISK")]
+
+
+def test_detail_carries_the_interim_results(db):
+    import sqlite3
+
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE analysis_results SET interim = ? WHERE ticker = 'AAPL'", (
+        '{"period_end": "2026-06-27", "months": 9, "revenue": 330.0, "revenue_prior": 300.0,'
+        ' "operating_income": 50.0, "operating_income_prior": 110.0}',))
+    conn.commit()
+    conn.close()
+
+    body = TestClient(create_app(db_path=db)).get("/api/securities/AAPL").json()
+
+    assert body["interim"]["months"] == 9
+    assert body["interim"]["deteriorated"] is True
+    assert body["interim"]["revenue_growth"] == pytest.approx(0.1)
+
+
+
+def test_detail_hides_noise_filings(db):
+    from stockscout.models import Filing
+
+    with connect(db) as conn:
+        Repository(conn).save_filings([
+            Filing(ticker="005930.KS", filed=date(2026, 9, 2),
+                   title="임원ㆍ주요주주특정증권등소유상황보고서", url="https://dart/n"),
+            Filing(ticker="005930.KS", filed=date(2026, 9, 1),
+                   title="단일판매ㆍ공급계약체결", url="https://dart/c"),
+        ])
+
+    body = TestClient(create_app(db_path=db)).get("/api/securities/005930.KS").json()
+
+    assert [f["category"] for f in body["filings"]] == ["CATALYST"]

@@ -157,6 +157,19 @@ def collect_market(
                                   f"{type(exc).__name__}: {exc}")
                 ticker_failed = True
 
+        # 가장 최근 중간보고서. 분기마다 바뀌어 증분이 아니라 매번 다시 받는다.
+        if not aborted and years and hasattr(fundamentals, "fetch_interim"):
+            try:
+                interim = fundamentals.fetch_interim(ticker, price_end.year)
+                if interim:
+                    repo.save_raw_statements(interim)
+            except ABORTING_ERRORS as exc:
+                repo.record_error(ticker, "interim", str(exc))
+                summary.abort_reason = str(exc)
+                aborted = True
+            except Exception as exc:
+                repo.record_error(ticker, "interim", f"{type(exc).__name__}: {exc}")
+
         # 최근 1년 공시. 실패해도 종목 결과에 영향이 없다 - 화면의 공시 목록과
         # 위험 공시 필터만 비고, 원인은 collect_errors에 남는다.
         if not aborted and hasattr(fundamentals, "fetch_filings"):

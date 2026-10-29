@@ -7,7 +7,9 @@ account_id를 먼저 보고, 없으면 계정과목명(account_nm)으로 폴백�
 
 from __future__ import annotations
 
-from stockscout.models import Financials, RawStatement
+from datetime import date
+
+from stockscout.models import InterimResults, Financials, RawStatement
 
 # 값이 없음을 나타내는 DART 표기
 BLANK_AMOUNTS = {"", "-", "－", "N/A"}
@@ -130,13 +132,23 @@ def _parse_amount(text: str | None) -> float | None:
 
 
 def pick_amount(
-    items: list[dict], ids: list[str], names: list[str]
+    items: list[dict], ids: list[str], names: list[str],
+    column: str | tuple[str, ...] = "thstrm_amount",
 ) -> float | None:
-    """account_id 우선, account_nm 폴백으로 첫 매치의 금액을 반환한다."""
+    """account_id 우선, account_nm 폴백으로 첫 매치의 금액을 반환한다.
+
+    column은 읽을 금액 칸이다. 튜플이면 앞에서부터 값이 있는 칸을 쓴다
+    (중간보고서의 누적 칸 thstrm_add_amount가 비면 thstrm_amount).
+    """
+    columns = (column,) if isinstance(column, str) else column
     by_id = {}
     by_name = {}
     for it in items:
-        amount = _parse_amount(it.get("thstrm_amount"))
+        amount = None
+        for col in columns:
+            amount = _parse_amount(it.get(col))
+            if amount is not None:
+                break
         if amount is None:
             continue
         account_id = (it.get("account_id") or "").strip()
@@ -340,3 +352,38 @@ def apply_audit_opinion(fin: Financials, payload: dict) -> None:
     opinion = parse_audit_opinion(payload)
     if opinion is not None:
         fin.audit_opinion = opinion
+
+
+# --- 중간보고서 (최근 실적 변화) ---------------------------------------------
+
+# 보고서 코드 -> 누적 개월. 12월 결산 기준이다(한국 상장사 대부분).
+INTERIM_MONTHS = {"11013": 3, "11012": 6, "11014": 9}
+_MONTH_END = {3: (3, 31), 6: (6, 30), 9: (9, 30)}
+
+
+def normalize_dart_interim(stmt: RawStatement) -> InterimResults | None:
+    """중간보고서의 손익 누적(thstrm_add_amount)과 전년 동기 누적(frmtrm_add_amount).
+
+    실측(삼성전자 2026 반기): 손익계산서 항목에 두 칸이 함께 온다. 현금흐름표는
+    전년 동기 누적이 비어 있어 쓰지 않는다. 영업이익을 못 찾으면 None.
+    """
+    months = INTERIM_MONTHS.get(str(stmt.payload.get("reprt_code")))
+    if months is None:
+        return None
+    items = [it for it in stmt.payload.get("list", []) or []
+             if it.get("sj_div") in ("IS", "CIS")]
+    now_cols = ("thstrm_add_amount", "thstrm_amount")
+    prior_cols = ("frmtrm_add_amount", "frmtrm_q_amount")
+    rev_ids, rev_names = ACCOUNT_MAP["revenue"][0]
+    op_ids, op_names = ACCOUNT_MAP["operating_income"][0]
+    op = pick_amount(items, op_ids, op_names, now_cols)
+    op_prior = pick_amount(items, op_ids, op_names, prior_cols)
+    if op is None or op_prior is None:
+        return None
+    month, day = _MONTH_END[months]
+    return InterimResults(
+        period_end=date(stmt.fiscal_year, month, day), months=months,
+        revenue=pick_amount(items, rev_ids, rev_names, now_cols),
+        revenue_prior=pick_amount(items, rev_ids, rev_names, prior_cols),
+        operating_income=op, operating_income_prior=op_prior,
+    )

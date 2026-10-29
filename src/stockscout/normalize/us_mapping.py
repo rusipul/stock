@@ -7,7 +7,9 @@ payload는 sources/edgar.py의 annual_facts가 고른 한 해의 연간 값이�
 
 from __future__ import annotations
 
-from stockscout.models import Financials, RawStatement
+from datetime import date
+
+from stockscout.models import Financials, InterimResults, RawStatement
 
 # 필드 -> 태그 우선순위. 위에서부터 첫 매치를 취한다.
 #
@@ -145,4 +147,23 @@ def normalize_edgar_statement(stmt: RawStatement) -> Financials:
         cash=pick(facts, CASH_TAGS),
         short_term_debt=short_term_debt(facts),
         **values,
+    )
+
+
+# --- 중간보고서 (최근 실적 변화) ---------------------------------------------
+
+
+def normalize_edgar_interim(stmt: RawStatement) -> InterimResults | None:
+    """sources/edgar.interim_facts가 고른 10-Q 누적과 전년 동기를 옮긴다."""
+    p = stmt.payload
+    now, prior = p.get("current", {}), p.get("prior", {})
+    op_tags = TAG_MAP["operating_income"] + OPERATING_INCOME_PROXIES
+    op, op_prior = pick(now, op_tags), pick(prior, op_tags)
+    if op is None or op_prior is None:
+        return None
+    return InterimResults(
+        period_end=date.fromisoformat(p["period_end"]), months=int(p["months"]),
+        revenue=pick(now, TAG_MAP["revenue"]),
+        revenue_prior=pick(prior, TAG_MAP["revenue"]),
+        operating_income=op, operating_income_prior=op_prior,
     )

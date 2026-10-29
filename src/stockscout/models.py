@@ -6,6 +6,8 @@ sources·normalize·store가 서로를 모른 채 같은 모델로 대화하게 
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from datetime import date
 
 from pydantic import BaseModel
@@ -25,6 +27,61 @@ class Security(BaseModel):
     currency: str
     listed_at: str | None = None
     in_universe: bool = True
+
+
+class InterimResults(BaseModel):
+    """가장 최근 중간보고서의 누적 실적과 작년 같은 기간 (최근 실적 변화).
+
+    5년 평균 점수가 최근의 급격한 악화를 가릴 수 있다. 등급 조건에는 넣지
+    않고 경고로 보인다 - 일시적 충격인지 사업 훼손인지는 숫자만으로 가를 수 없다.
+    """
+
+    period_end: date
+    months: int                          # 누적 개월 수 (3·6·9)
+    revenue: float | None = None
+    revenue_prior: float | None = None
+    operating_income: float | None = None
+    operating_income_prior: float | None = None
+
+    # 영업이익이 이만큼 이상 줄었거나 적자로 돌아섰으면 '최근 실적 급감'이다.
+    DETERIORATION: ClassVar[float] = -0.30
+
+    @staticmethod
+    def _growth(now: float | None, before: float | None) -> float | None:
+        # 부호가 다르거나 기준이 0 이하면 성장률이 무의미하다.
+        if now is None or before is None or before <= 0 or now < 0:
+            return None
+        return now / before - 1
+
+    @property
+    def revenue_growth(self) -> float | None:
+        return self._growth(self.revenue, self.revenue_prior)
+
+    @property
+    def operating_income_growth(self) -> float | None:
+        return self._growth(self.operating_income, self.operating_income_prior)
+
+    @property
+    def operating_margin(self) -> float | None:
+        if self.revenue and self.operating_income is not None:
+            return self.operating_income / self.revenue
+        return None
+
+    @property
+    def operating_margin_prior(self) -> float | None:
+        if self.revenue_prior and self.operating_income_prior is not None:
+            return self.operating_income_prior / self.revenue_prior
+        return None
+
+    @property
+    def deteriorated(self) -> bool:
+        now, before = self.operating_income, self.operating_income_prior
+        if now is None or before is None:
+            return False
+        if before > 0 and now <= 0:
+            return True                  # 적자 전환
+        g = self.operating_income_growth
+        return g is not None and g <= self.DETERIORATION
 
 
 class Filing(BaseModel):
@@ -381,6 +438,7 @@ class AnalysisResult(BaseModel):
     signal_reason: str | None = None
     benchmark: str | None = None   # 시장 비교 지수 기호 (benchmarks.py)
     weak_axes: list[str] = []      # 영역 최소점 미달·측정 불가 축 (grading.weak_axes)
+    interim: InterimResults | None = None   # 최근 중간보고서 누적 vs 전년 동기
 
     @property
     def passed_filters(self) -> bool:

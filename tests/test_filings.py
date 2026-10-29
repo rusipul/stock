@@ -143,3 +143,59 @@ def test_edgar_fetch_filings_keeps_only_the_requested_period():
     assert [(f.form, f.items) for f in filings] == [("8-K", "2.02,9.01"), ("10-Q", "")]
     assert filings[0].url == ("https://www.sec.gov/Archives/edgar/data/320193/"
                               "000032019326000101/a8k.htm")
+
+
+
+# --- 잡음과 회복 계기 -------------------------------------------------------
+
+from stockscout.normalize.filings import CATEGORY_CATALYST, is_noise  # noqa: E402
+
+
+@pytest.mark.parametrize("title", [
+    "단일판매ㆍ공급계약체결",
+    "[기재정정]단일판매ㆍ공급계약체결",
+    "주요사항보고서(자기주식취득결정)",
+    "주식소각결정",
+])
+def test_kr_catalyst_titles(title):
+    """수주·주주환원은 회복 계기에 가장 가까운 공시다."""
+    assert kr(title) == CATEGORY_CATALYST
+
+
+@pytest.mark.parametrize("title", [
+    "임원ㆍ주요주주특정증권등소유상황보고서",
+    "주식등의대량보유상황보고서(약식)",
+    "최대주주등소유주식변동신고서",
+])
+def test_kr_ownership_reports_are_noise(title):
+    assert is_noise(Filing(ticker="X.KS", filed=date(2026, 9, 1), title=title, url="u"))
+
+
+def test_a_risk_filing_is_never_noise():
+    assert not is_noise(Filing(ticker="X.KS", filed=date(2026, 9, 1),
+                               title="불성실공시법인지정", url="u"))
+
+
+def test_edgar_skips_structured_notes_and_insider_forms():
+    """실측: 1년치의 4분의 3이 은행 구조화채권(424B2), 나머지 대부분이 Form 4다."""
+    subs = {"filings": {"recent": {
+        "form": ["424B2", "4", "FWP", "144", "8-K", "10-Q"],
+        "filingDate": ["2026-09-10"] * 6,
+        "items": [""] * 4 + ["2.02", ""],
+        "accessionNumber": [f"0000320193-26-00010{i}" for i in range(6)],
+        "primaryDocument": ["d.htm"] * 6,
+        "primaryDocDescription": [""] * 6,
+    }}}
+
+    def handler(request):
+        if request.url.path.endswith("company_tickers.json"):
+            return httpx.Response(200, json={"0": {"cik_str": 320193, "ticker": "AAPL",
+                                                   "title": "Apple"}})
+        return httpx.Response(200, json=subs)
+
+    src = EdgarSource("ua me@example.com", rate_per_sec=1000.0,
+                      client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+    forms = [f.form for f in src.fetch_filings("AAPL", date(2025, 10, 1), date(2026, 9, 30))]
+
+    assert forms == ["8-K", "10-Q"]

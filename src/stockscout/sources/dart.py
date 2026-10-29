@@ -40,6 +40,9 @@ SOURCE_SHARES = "dart_shares"
 
 # 회계감사인의 명칭 및 감사의견(accnutAdtorNmNdAdtOpinion.json)의
 # raw_financials.source 값. 주식수와 같은 이유로 테이블을 늘리지 않는다.
+SOURCE_INTERIM = "dart_interim"
+# 최근 것부터: 3분기·반기·1분기
+INTERIM_REPORT_CODES = ("11014", "11012", "11013")
 SOURCE_AUDIT = "dart_audit"
 
 
@@ -213,6 +216,30 @@ class DartSource:
             if payload is not None:
                 return {**payload, "fs_div": fs_div}
         return None
+
+    # --- 중간보고서 ----------------------------------------------------
+
+    @retry_on_transient(attempts=3)
+    def fetch_interim(self, ticker: str, year: int) -> list[RawStatement]:
+        """그해 가장 최근 중간보고서(3분기 -> 반기 -> 1분기). 연결이 없으면 별도.
+
+        아직 1분기 보고서도 없으면(연초) 빈 목록 - 최근 실적은 사업보고서다.
+        """
+        self.ensure_corp_codes()
+        corp_code = self.corp_codes.get(self._stock_code(ticker))
+        if corp_code is None:
+            raise PermanentSourceError(f"{ticker}의 corp_code를 찾을 수 없습니다")
+        for reprt_code in INTERIM_REPORT_CODES:
+            for fs_div in ("CFS", "OFS"):
+                payload = self._call("fnlttSinglAcntAll.json", {
+                    "corp_code": corp_code, "bsns_year": str(year),
+                    "reprt_code": reprt_code, "fs_div": fs_div,
+                })
+                if payload is not None:
+                    return [RawStatement(
+                        ticker=ticker, fiscal_year=year, source=SOURCE_INTERIM,
+                        payload={**payload, "reprt_code": reprt_code, "fs_div": fs_div})]
+        return []
 
     # --- 공시검색 ------------------------------------------------------
 

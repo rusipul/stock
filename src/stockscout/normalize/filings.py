@@ -16,6 +16,7 @@ CATEGORY_RISK = "RISK"            # 존속·신뢰를 흔드는 공시. 1년 안
 CATEGORY_DILUTION = "DILUTION"    # 자금조달·지분 희석
 CATEGORY_EARNINGS = "EARNINGS"    # 실적
 CATEGORY_LEGAL = "LEGAL"          # 소송
+CATEGORY_CATALYST = "CATALYST"    # 수주·주주환원 - 회복 계기에 가장 가까운 공시
 
 # 한국(DART 공시 제목). 공백을 지우고 부분 문자열로 본다.
 KR_RISK = ("관리종목", "상장적격성", "불성실공시", "회생절차", "파산", "부도",
@@ -28,6 +29,11 @@ KR_DILUTION = ("유상증자", "전환사채", "신주인수권부사채", "교�
 KR_EARNINGS = ("영업(잠정)실적", "매출액또는손익구조", "사업보고서", "분기보고서",
                "반기보고서")
 KR_LEGAL = ("소송",)
+KR_CATALYST = ("공급계약", "자기주식취득", "주식소각", "자기주식소각")
+# 화면 목록에서 숨기는 공시. 지분 변동 신고라 하락 원인·회복 계기와 무관하고,
+# 수가 가장 많다(실측: 1년 5,466건 중 1,700건 이상).
+KR_NOISE = ("소유상황보고", "대량보유상황보고", "소유주식변동신고",
+            "대규모기업집단현황공시")
 
 # 미국(SEC). 8-K 항목 번호: https://www.sec.gov/fast-answers/answersform8khtm
 US_RISK_FORMS = ("NT 10-K", "NT 10-Q", "NT 20-F")    # 정기 공시 지연
@@ -36,7 +42,22 @@ US_RISK_ITEMS = ("1.03",   # 파산·법정관리
                  "4.02")   # 과거 재무제표 신뢰 불가(정정)
 US_EARNINGS_ITEMS = ("2.02",)
 US_EARNINGS_FORMS = ("10-K", "10-Q", "10-K/A", "10-Q/A")
-US_DILUTION_PREFIXES = ("S-1", "S-3", "424B")
+US_DILUTION_PREFIXES = ("S-1", "S-3", "424B1", "424B4", "424B5")
+# EDGAR에서 받는 양식. 나머지는 받지 않는다 - 실측: 1년치 65,000건 중 은행
+# 구조화채권(424B2) 49,000건, 내부자 거래(4) 3,600건 등 잡음이 대부분이었다.
+US_KEPT_FORMS = ("10-K", "10-Q", "10-K/A", "10-Q/A", "8-K", "8-K/A",
+                 "NT 10-K", "NT 10-Q", "NT 20-F", "20-F", "6-K",
+                 "S-1", "S-3", "S-3ASR", "424B1", "424B4", "424B5")
+
+
+def is_noise(filing: Filing) -> bool:
+    """화면 목록에서 숨길 공시인가. 위험 공시는 절대 숨기지 않는다."""
+    if classify_filing(filing) == CATEGORY_RISK:
+        return False
+    if filing.form is not None:
+        return filing.form not in US_KEPT_FORMS
+    t = filing.title.replace(" ", "")
+    return any(w in t for w in KR_NOISE)
 
 
 def classify_filing(filing: Filing) -> str | None:
@@ -52,6 +73,8 @@ def _classify_kr(title: str) -> str | None:
             if word == KR_HALT and any(b in t for b in KR_BENIGN_HALT):
                 continue
             return CATEGORY_RISK
+    if any(w in t for w in KR_CATALYST):
+        return CATEGORY_CATALYST
     if any(w in t for w in KR_DILUTION):
         return CATEGORY_DILUTION
     if any(w in t for w in KR_EARNINGS):

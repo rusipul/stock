@@ -274,3 +274,8 @@ table.fin th:first-child, table.fin td:first-child { text-align: left; }
 .ftag.risk { background: #fed7d7; color: #c53030; }
 .ftag.dilution { background: #fefcbf; color: #975a16; }
 .ftag.earnings { background: #e6fffa; color: #2c7a7b; }
+.ftag.catalyst { background: #e9d8fd; color: #6b46c1; }
+
+/* 최근 실적 변화 */
+.interim { font-size: 13px; margin: -8px 0 16px; color: var(--muted); }
+.interim.warn { color: #c53030; font-weight: 600; }

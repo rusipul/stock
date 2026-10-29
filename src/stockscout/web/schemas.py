@@ -48,6 +48,16 @@ class WindowStat(BaseModel):
     drop_vs_high: float | None = None
 
 
+class InterimRow(BaseModel):
+    period_end: str
+    months: int
+    revenue_growth: float | None
+    operating_income_growth: float | None
+    operating_margin: float | None
+    operating_margin_prior: float | None
+    deteriorated: bool
+
+
 class FilingRow(BaseModel):
     filed: str
     title: str
@@ -125,6 +135,7 @@ class SecurityDetail(SecurityRow):
     score_detail: str | None
     financials: list[FinancialRow]
     filings: list[FilingRow] = []   # 최근 1년 공시, 최근 것부터
+    interim: InterimRow | None = None   # 최근 중간보고서 누적 vs 전년 동기
 
 
 

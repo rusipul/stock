@@ -17,12 +17,13 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from stockscout.models import AXIS_UNMEASURABLE, Financials
-from stockscout.normalize.filings import classify_filing
+from stockscout.models import AXIS_UNMEASURABLE, Financials, InterimResults
+from stockscout.normalize.filings import classify_filing, is_noise
 from stockscout.store.db import DEFAULT_DB_PATH, connect, init_db
 from stockscout.store.repository import Repository
 from stockscout.web.schemas import (
     FilingRow,
+    InterimRow,
     FinancialRow,
     PricePoint,
     PriceSeries,
@@ -220,10 +221,12 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                 drawdown=_drawdown(row),
                 benchmark=_benchmark(row),
                 **_axis_fields(row),
+                interim=_interim(row),
                 filings=[
                     FilingRow(filed=f.filed.isoformat(), title=f.title, url=f.url,
                               category=classify_filing(f))
-                    for f in repo.get_filings(ticker, limit=FILINGS_SHOWN)
+                    for f in [f for f in repo.get_filings(ticker)
+                              if not is_noise(f)][:FILINGS_SHOWN]
                 ],
                 score_total=row["score_total"],
                 market_cap=row["market_cap"],
@@ -314,6 +317,19 @@ def _drawdown_json(row) -> dict:
 def _drawdown(row) -> dict[int, dict]:
     """개월 -> 단기 하락. 이 컬럼 이전 스냅샷은 빈 dict다(화면은 등급을 비운다)."""
     return {int(k): v for k, v in _drawdown_json(row).get("windows", {}).items()}
+
+
+def _interim(row) -> InterimRow | None:
+    stored = row.get("interim")
+    if not stored:
+        return None
+    r = InterimResults.model_validate_json(stored)
+    return InterimRow(
+        period_end=r.period_end.isoformat(), months=r.months,
+        revenue_growth=r.revenue_growth, operating_income_growth=r.operating_income_growth,
+        operating_margin=r.operating_margin, operating_margin_prior=r.operating_margin_prior,
+        deteriorated=r.deteriorated,
+    )
 
 
 def _axis_fields(row) -> dict:

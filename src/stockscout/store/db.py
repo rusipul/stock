@@ -45,6 +45,8 @@ def _add_weak_axes_column_if_missing(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE analysis_results ADD COLUMN weak_axes TEXT")
     if "fcf_yield" not in columns:
         conn.execute("ALTER TABLE analysis_results ADD COLUMN fcf_yield REAL")
+    if "interim" not in columns:
+        conn.execute("ALTER TABLE analysis_results ADD COLUMN interim TEXT")
 
 
 def _add_drawdown_stats_column_if_missing(conn: sqlite3.Connection) -> None:

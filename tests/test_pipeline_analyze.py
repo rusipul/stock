@@ -790,3 +790,47 @@ def test_an_old_risk_filing_is_ignored(repo):
 
     (row,) = repo.get_analysis_results(summary.snapshot_id)
     assert "RISK_DISCLOSURE" not in json.loads(row["filter_failures"])
+
+
+def test_recent_deterioration_is_warned_in_the_reason(repo):
+    """최근 누적 영업이익이 -30% 이하면 판정 근거에 경고가 붙는다(등급은 그대로)."""
+    from stockscout.models import RawStatement
+
+    seed_drop(repo)
+    repo.save_raw_statements([RawStatement(
+        ticker="005930.KS", fiscal_year=2026, source="dart_interim", payload={
+            "reprt_code": "11012", "list": [
+                {"sj_div": "IS", "account_id": "ifrs-full_Revenue", "account_nm": "매출액",
+                 "thstrm_add_amount": "900", "frmtrm_add_amount": "1000"},
+                {"sj_div": "IS", "account_id": "dart_OperatingIncomeLoss",
+                 "account_nm": "영업이익", "thstrm_add_amount": "40",
+                 "frmtrm_add_amount": "100"},
+            ]})])
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+    interim = json.loads(row["interim"])
+    assert interim["months"] == 6
+    assert "최근 실적 급감" in row["signal_reason"]
+    assert row["signal_grade"] in ("STRONG", "WATCH")
+
+
+def test_an_interim_older_than_the_latest_annual_is_not_used(repo):
+    """2025 반기 보고서는 2025 사업보고서에 이미 들어갔다."""
+    from stockscout.models import RawStatement
+
+    seed_drop(repo)
+    repo.save_raw_statements([RawStatement(
+        ticker="005930.KS", fiscal_year=2025, source="dart_interim", payload={
+            "reprt_code": "11012", "list": [
+                {"sj_div": "IS", "account_id": "ifrs-full_Revenue", "account_nm": "매출액",
+                 "thstrm_add_amount": "900", "frmtrm_add_amount": "1000"},
+                {"sj_div": "IS", "account_id": "dart_OperatingIncomeLoss",
+                 "account_nm": "영업이익", "thstrm_add_amount": "40",
+                 "frmtrm_add_amount": "100"}]})])
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+    assert row["interim"] is None

@@ -388,6 +388,20 @@ function renderDetail(d, prices) {
   ].join("");
   panel.appendChild(kpis);
 
+  // 최근 실적 변화. 5년 평균 점수가 최근 악화를 가릴 수 있다.
+  if (d.interim) {
+    const it = d.interim;
+    const rec = document.createElement("p");
+    rec.className = "interim" + (it.deteriorated ? " warn" : "");
+    const g = (v) => (v === null || v === undefined) ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(0) + "%";
+    rec.textContent =
+      `최근 실적 (${it.period_end.slice(0, 4)}년 ${it.months}개월 누적, 전년 동기 대비): `
+      + `매출 ${g(it.revenue_growth)} · 영업이익 ${g(it.operating_income_growth)}`
+      + ` · 영업이익률 ${pct(it.operating_margin_prior)} → ${pct(it.operating_margin)}`
+      + (it.deteriorated ? " · 주의: 최근 실적 급감" : "");
+    panel.appendChild(rec);
+  }
+
   // 최근 공시. 하락 원인과 회복 계기는 사람이 판단한다 - 그 재료를 보인다.
   if (d.filings && d.filings.length) {
     panel.appendChild(sectionTitle("최근 공시"));
@@ -447,7 +461,8 @@ function renderDetail(d, prices) {
   drawChart(prices);
 }
 
-const FILING_LABELS = { RISK: "위험", DILUTION: "자금조달", EARNINGS: "실적", LEGAL: "소송" };
+const FILING_LABELS = { RISK: "위험", DILUTION: "자금조달", EARNINGS: "실적", LEGAL: "소송",
+                        CATALYST: "수주·주주환원" };
 
 const BENCHMARK_LABELS = { "^KS11": "코스피", "^KQ11": "코스닥", "^GSPC": "S&P 500" };
 

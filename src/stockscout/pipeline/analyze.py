@@ -29,7 +29,9 @@ from stockscout.analysis.valuation import (
 from stockscout.benchmarks import benchmark_for
 from stockscout.config import Config
 from stockscout.normalize.filings import CATEGORY_RISK, classify_filing
-from stockscout.models import AnalysisResult, FilterOutcome, ScoreCard, Snapshot
+from stockscout.normalize.kr_mapping import normalize_dart_interim
+from stockscout.normalize.us_mapping import normalize_edgar_interim
+from stockscout.models import AnalysisResult, InterimResults, FilterOutcome, ScoreCard, Snapshot
 from stockscout.store.repository import Repository
 
 SUPPORTED_MARKETS = ("KR", "US")
@@ -167,6 +169,7 @@ def analyze_market(
             # 하드필터에 걸린 종목은 점수를 계산하지 않는다 (설계서 §8.1).
             # 매겨두면 화면에 "제외됐지만 85점"이라는 모순된 표시가 난다.
             card = score_security(financials, config.scoring) if outcome.passed else None
+            interim = _latest_interim(repo, security, financials)
             grade, reason = grade_signal(
                 stats,
                 score_total=card.total if card else None,
@@ -174,6 +177,14 @@ def analyze_market(
                 config=signal,
                 card=card,
             )
+            if interim is not None and interim.deteriorated:
+                g = interim.operating_income_growth
+                reason += (
+                    f" · 주의: 최근 실적 급감 ({interim.period_end.year}년 "
+                    f"{interim.months}개월 누적 영업이익 "
+                    + (f"{g * 100:+.0f}%" if g is not None else "적자 전환")
+                    + ", 전년 동기 대비)"
+                )
         except Exception as exc:
             repo.record_error(security.ticker, "analyze",
                               f"{type(exc).__name__}: {exc}")
@@ -193,6 +204,7 @@ def analyze_market(
             signal_reason=reason,
             benchmark=benchmark,
             weak_axes=weak_axes(card, signal.min_axis_ratio) if card else [],
+            interim=interim,
         ))
         summary.analyzed += 1
         if outcome.passed:
@@ -259,3 +271,29 @@ def _risk_disclosure(repo: Repository, ticker: str, as_of: date) -> list[str]:
         if filing.filed <= as_of and classify_filing(filing) == CATEGORY_RISK:
             return [RISK_DISCLOSURE]
     return []
+
+
+INTERIM_SOURCES = {"KR": ("dart_interim", normalize_dart_interim),
+                   "US": ("edgar_interim", normalize_edgar_interim)}
+
+
+def _latest_interim(repo: Repository, security, financials) -> InterimResults | None:
+    """가장 최근 중간보고서. 최신 사업보고서보다 오래됐으면 None(이미 연간에 들어갔다).
+
+    한국은 12월 결산이라 회계연도로, 미국은 결산월이 제각각이라 결산일로 비교한다.
+    """
+    source, normalize = INTERIM_SOURCES[security.market]
+    raws = sorted(repo.get_raw_statements(security.ticker, source=source),
+                  key=lambda r: r.fiscal_year)
+    if not raws:
+        return None
+    result = normalize(raws[-1])
+    if result is None:
+        return None
+    if security.market == "KR":
+        latest_year = max((f.fiscal_year for f in financials), default=0)
+        return result if raws[-1].fiscal_year > latest_year else None
+    annual_ends = [r.payload.get("period_end") for r in
+                   repo.get_raw_statements(security.ticker, source="edgar")]
+    latest_end = max((date.fromisoformat(e) for e in annual_ends if e), default=date.min)
+    return result if result.period_end > latest_end else None

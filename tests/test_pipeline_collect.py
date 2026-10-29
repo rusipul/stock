@@ -861,3 +861,23 @@ def test_a_filing_failure_does_not_fail_the_security(repo):
                              price_start=date(2021, 9, 10), price_end=date(2026, 9, 10))
 
     assert summary.succeeded == 1
+
+
+def test_collect_refreshes_the_latest_interim_report(repo):
+    """중간보고서는 분기마다 바뀌어 증분이 아니라 매번 다시 받는다."""
+    from stockscout.models import RawStatement
+
+    class WithInterim(FakeFundamentals):
+        def fetch_interim(self, ticker, year):
+            self.year = year
+            return [RawStatement(ticker=ticker, fiscal_year=year, source="dart_interim",
+                                 payload={"reprt_code": "11012", "list": []})]
+
+    sync_universe(repo, FakeUniverse([sec()]), market="KR")
+    source = WithInterim()
+
+    collect_market(repo, market="KR", fundamentals=source, prices=FakePrices(),
+                   years=[2025], price_start=date(2021, 9, 10), price_end=date(2026, 9, 10))
+
+    assert source.year == 2026
+    assert [s.fiscal_year for s in repo.get_raw_statements("005930.KS", "dart_interim")] == [2026]
