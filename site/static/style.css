@@ -149,7 +149,7 @@ input[type=range] { width: 100%; }
 .badge.pass { background: #c6f6d5; color: #22543d; }
 .badge.fail { background: #fed7d7; color: #822727; }
 
-#chart-box { position: relative; height: 100%; min-height: 200px; }
+#chart-box { position: relative; flex: 1; min-height: 200px; cursor: crosshair; }
 
 .kpis { display: flex; gap: 8px; }
 .kpi {
@@ -309,7 +309,8 @@ table.fin th:first-child, table.fin td:first-child { text-align: left; }
   min-height: 0;
 }
 .cell-top { grid-area: top; overflow: visible; padding: 10px 12px; }
-.cell-chart { grid-area: chart; padding: 8px 10px; overflow: hidden; }
+.cell-chart { grid-area: chart; padding: 8px 10px; overflow: hidden;
+              display: flex; flex-direction: column; }
 #cell-score { grid-area: score; }
 #cell-reason { grid-area: reason; }
 #cell-fin { grid-area: fin; }
@@ -370,3 +371,13 @@ table.fin th:first-child, table.fin td:first-child { text-align: left; }
 .sense.breakout { background: #fed7d7; color: #c53030; }
 .sense.near { background: #feebc8; color: #c05621; }
 #sense-controls .hint { margin-top: 6px; }
+
+
+/* 차트 기간 버튼 */
+.chart-tools { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; flex-wrap: wrap; }
+.chart-tools .ptab {
+  border: 1px solid var(--border); background: #fff; color: var(--muted);
+  border-radius: 4px; padding: 1px 8px; font-size: 11.5px; cursor: pointer;
+}
+.chart-tools .ptab.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chart-hint { margin-left: 8px; font-size: 11px; color: var(--muted); }

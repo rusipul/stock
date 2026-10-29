@@ -12,6 +12,10 @@ const state = {
   months: null,          // 하락 기간(개월). null이면 스냅샷 기본값
   minScore: 70,
   detail: null,       // 열려 있는 상세(기간을 바꾸면 다시 그린다)
+  chartPeriod: "all", // 차트 기간 버튼: "all" 또는 개월 수
+  chartFull: null,    // 확대 전 전체 차트 데이터 {labels, data: [[...], ...]}
+  chartView: null,    // 보이는 구간 [i0, i1] (전체 기준 인덱스)
+  drag: null,         // 드래그 확대 중인 구간 {x0, x1}
   chart: null,
 };
 
@@ -53,6 +57,9 @@ function loadPrefs() {
     if (saved !== null) state.dropThreshold = parseFloat(saved);
     const months = parseInt(localStorage.getItem("stockscout.ddMonths"), 10);
     if (months > 0) state.months = months;
+    const period = localStorage.getItem("stockscout.chartPeriod");
+    if (period === "all") state.chartPeriod = "all";
+    else if (Number(period) > 0) state.chartPeriod = Number(period);
     const mode = localStorage.getItem("stockscout.mode");
     if (mode === "dip" || mode === "sense") state.mode = mode;
     const sense = JSON.parse(localStorage.getItem("stockscout.sense") || "null");
@@ -69,6 +76,7 @@ function savePrefs() {
     localStorage.setItem("stockscout.ddThreshold", String(state.dropThreshold));
     localStorage.setItem("stockscout.ddMonths", String(state.months));
     localStorage.setItem("stockscout.mode", state.mode);
+    localStorage.setItem("stockscout.chartPeriod", String(state.chartPeriod));
     localStorage.setItem("stockscout.sense", JSON.stringify(state.sense));
     localStorage.setItem("stockscout.minScore", String(state.minScore));
     localStorage.setItem("stockscout.market", state.market);
@@ -469,7 +477,10 @@ function renderDetail(d, prices) {
   panel.innerHTML = `
     <div class="detail-grid">
       <section class="cell cell-top" id="cell-top"></section>
-      <section class="cell cell-chart"><div id="chart-box"><canvas id="price-chart"></canvas></div></section>
+      <section class="cell cell-chart">
+        <div class="chart-tools" id="chart-tools"></div>
+        <div id="chart-box"><canvas id="price-chart"></canvas></div>
+      </section>
       <section class="cell" id="cell-score"><h3 class="cell-title">적합점수</h3></section>
       <section class="cell" id="cell-reason"><h3 class="cell-title">판정근거</h3></section>
       <section class="cell" id="cell-fin"><h3 class="cell-title">재무추이</h3></section>
@@ -816,9 +827,14 @@ function drawChart(p) {
     });
   }
 
+  // 확대 전 전체 데이터. 확대는 이 배열을 잘라 보여 준다.
+  state.chartFull = { labels, data: datasets.map((ds) => ds.data) };
+  state.drag = null;
+
   state.chart = new Chart($("price-chart"), {
     type: "line",
     data: { labels, datasets },
+    plugins: [crosshairPlugin],
     options: {
       // 애니메이션을 끈다. 1,200점짜리 선 6개를 애니메이션할 이유가 없고,
       // 화면 없는 브라우저(검증 스크립트)에서는 그리다 멈춰 선이 중간에서 끊겼다.
@@ -826,7 +842,11 @@ function drawChart(p) {
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
-      plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
+      plugins: {
+        legend: { labels: { boxWidth: 12, font: { size: 11 } } },
+        // 안내창에는 종가와 거래량만. 기준선은 범례에 값이 이미 있다.
+        tooltip: { filter: (item) => item.datasetIndex === 0 || item.dataset.yAxisID === "yv" },
+      },
       scales: {
         x: { ticks: { maxTicksLimit: 8, font: { size: 10 } }, grid: { display: false } },
         y: { ticks: { font: { size: 10 }, callback: (v) => money(v) } },
@@ -835,6 +855,179 @@ function drawChart(p) {
       },
     },
   });
+
+  const canvas = $("price-chart");
+  canvas.onmousedown = (e) => onChartMouseDown(e);
+  canvas.onmousemove = (e) => onChartMouseMove(e);
+  canvas.onmouseup = (e) => onChartMouseUp(e);
+  canvas.ondblclick = () => onChartDoubleClick();
+  canvas.onmouseleave = () => onChartMouseLeave();
+  renderChartTools();
+  const [i0, i1] = periodRange(labels, state.chartPeriod);
+  applyChartRange(i0, i1);
+}
+
+// --- 차트 확대 ------------------------------------------------------------
+
+const CHART_PERIODS = [[1, "1개월"], [3, "3개월"], [6, "6개월"], [12, "1년"],
+                       [36, "3년"], ["all", "전체"]];
+const MIN_ZOOM_POINTS = 5;   // 드래그가 이보다 좁으면 확대하지 않는다 (실수 클릭)
+
+// 날짜 배열에서 마지막 날짜로부터 months개월 안의 [첫 인덱스, 끝 인덱스].
+// "all"이거나 데이터가 그보다 짧으면 전체.
+function periodRange(dates, months) {
+  const end = dates.length - 1;
+  if (months === "all" || end < 0) return [0, Math.max(end, 0)];
+  // UTC로만 계산한다. 로컬 자정 -> toISOString은 한국 시간(UTC+9)에서 하루 당겨진다.
+  const [y, m, d] = dates[end].split("-").map(Number);
+  const cut = new Date(Date.UTC(y, m - 1 - months, d)).toISOString().slice(0, 10);
+  const start = dates.findIndex((d) => d >= cut);
+  return [Math.max(start, 0), end];
+}
+
+// 전체 데이터에서 [i0, i1]만 보이게 한다. 가격축은 Chart.js가 보이는 구간에
+// 맞춰 다시 잡고, 거래량축은 보이는 구간의 최대값으로 다시 맞춘다.
+function applyChartRange(i0, i1) {
+  const chart = state.chart, full = state.chartFull;
+  if (!chart || !full) return;
+  state.chartView = [i0, i1];
+  chart.data.labels = full.labels.slice(i0, i1 + 1);
+  chart.data.datasets.forEach((ds, k) => { ds.data = full.data[k].slice(i0, i1 + 1); });
+  // 가격축은 보이는 구간의 종가에 맞춘다. 5년 고점 같은 먼 기준선까지 담으면
+  // 확대해도 가격선이 납작해진다 - 범위 밖 기준선은 잘린다.
+  const closes = chart.data.datasets[0].data.filter((v) => v !== null && v !== undefined);
+  if (closes.length) {
+    const lo = Math.min(...closes), hi = Math.max(...closes);
+    const pad = (hi - lo) * 0.08 || hi * 0.02;
+    chart.options.scales.y.min = lo - pad;
+    chart.options.scales.y.max = hi + pad;
+  }
+  const vol = chart.data.datasets.find((ds) => ds.yAxisID === "yv");
+  if (vol) {
+    const maxVol = Math.max(0, ...vol.data.filter((v) => v !== null));
+    chart.options.scales.yv.max = maxVol * 4 || undefined;
+  }
+  chart.update("none");
+  renderChartTools();
+}
+
+function renderChartTools() {
+  const tools = $("chart-tools");
+  if (!tools) return;
+  const full = state.chartFull, view = state.chartView;
+  const zoomed = full && view
+    && JSON.stringify(view) !== JSON.stringify(periodRange(full.labels, state.chartPeriod));
+  tools.innerHTML = "";
+  for (const [key, label] of CHART_PERIODS) {
+    const b = document.createElement("button");
+    b.className = "ptab" + (!zoomed && state.chartPeriod === key ? " on" : "");
+    b.textContent = label;
+    b.onclick = () => onChartPeriod(key);
+    tools.appendChild(b);
+  }
+  const hint = document.createElement("span");
+  hint.className = "chart-hint";
+  hint.textContent = zoomed && view
+    ? `${full.labels[view[0]]} ~ ${full.labels[view[1]]} 확대 중 · 더블클릭하면 원래대로`
+    : "차트를 드래그하면 그 구간을 확대합니다";
+  tools.appendChild(hint);
+}
+
+function onChartPeriod(key) {
+  state.chartPeriod = key;
+  savePrefs();
+  const [i0, i1] = periodRange(state.chartFull.labels, key);
+  applyChartRange(i0, i1);
+}
+
+// 마우스 x -> 보이는 구간 안의 인덱스 (0 ~ 보이는 개수-1)
+function chartIndexAt(e) {
+  const chart = state.chart;
+  const rect = chart.canvas.getBoundingClientRect();
+  const x = Math.min(Math.max(e.clientX - rect.left, chart.chartArea.left), chart.chartArea.right);
+  const idx = Math.round(chart.scales.x.getValueForPixel(x));
+  return Math.min(Math.max(idx, 0), chart.data.labels.length - 1);
+}
+
+function onChartMouseDown(e) {
+  if (!state.chart) return;
+  const x = e.clientX - state.chart.canvas.getBoundingClientRect().left;
+  state.drag = { x0: x, x1: x, i0: chartIndexAt(e) };
+}
+
+// Chart.js의 이벤트 처리 뒤에 불린다(핸들러를 차트 생성 뒤에 달았다). 가로선은
+// 이벤트만으로는 다시 그려지지 않아(animation: false) 여기서 직접 그린다.
+function onChartMouseMove(e) {
+  if (!state.chart) return;
+  if (state.drag) state.drag.x1 = e.clientX - state.chart.canvas.getBoundingClientRect().left;
+  state.chart.draw();
+}
+
+function onChartMouseLeave() {
+  if (!state.chart) return;
+  state.chart.$cross = null;
+  state.chart.draw();
+}
+
+function onChartMouseUp(e) {
+  const drag = state.drag;
+  state.drag = null;
+  if (!drag || !state.chartView) return;
+  const a = Math.min(drag.i0, chartIndexAt(e)), b = Math.max(drag.i0, chartIndexAt(e));
+  if (b - a + 1 < MIN_ZOOM_POINTS) { state.chart.draw(); return; }
+  const base = state.chartView[0];
+  applyChartRange(base + a, base + b);
+}
+
+function onChartDoubleClick() {
+  if (!state.chartFull) return;
+  const [i0, i1] = periodRange(state.chartFull.labels, state.chartPeriod);
+  applyChartRange(i0, i1);
+}
+
+// --- 마우스 가로선 --------------------------------------------------------
+
+// 마우스 높이에 가로 점선과 그 높이의 가격을, 드래그 중이면 선택 구간을 그린다.
+const crosshairPlugin = {
+  id: "crosshair",
+  afterEvent(chart, args) {
+    const e = args.event;
+    if (e.type === "mousemove") chart.$cross = { x: e.x, y: e.y };
+    else if (e.type === "mouseout") chart.$cross = null;
+  },
+  afterDraw(chart) { crosshairAfterDraw(chart); },
+};
+
+function crosshairAfterDraw(chart) {
+  const { ctx, chartArea: area } = chart;
+  ctx.save();
+  if (state.drag && state.chart === chart) {
+    const x0 = Math.max(Math.min(state.drag.x0, state.drag.x1), area.left);
+    const x1 = Math.min(Math.max(state.drag.x0, state.drag.x1), area.right);
+    ctx.fillStyle = "rgba(49, 130, 206, 0.12)";
+    ctx.fillRect(x0, area.top, x1 - x0, area.bottom - area.top);
+  }
+  const c = chart.$cross;
+  if (c && c.x >= area.left && c.x <= area.right && c.y >= area.top && c.y <= area.bottom) {
+    ctx.strokeStyle = "rgba(45, 55, 72, 0.55)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(area.left, c.y);
+    ctx.lineTo(area.right, c.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // 오른쪽 끝에 그 높이의 가격
+    const label = money(chart.scales.y.getValueForPixel(c.y));
+    ctx.font = "11px 'Malgun Gothic', sans-serif";
+    const w = ctx.measureText(label).width + 10;
+    ctx.fillStyle = "#2d3748";
+    ctx.fillRect(area.right - w, c.y - 9, w, 18);
+    ctx.fillStyle = "#fff";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, area.right - w + 5, c.y);
+  }
+  ctx.restore();
 }
 
 // --- 초기화 ----------------------------------------------------------
