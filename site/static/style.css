@@ -11,7 +11,11 @@
 
 * { box-sizing: border-box; }
 
+html, body { height: 100%; }
+
 body {
+  display: flex;
+  flex-direction: column;
   margin: 0;
   font-family: "Malgun Gothic", "맑은 고딕", system-ui, sans-serif;
   font-size: 14px;
@@ -33,7 +37,8 @@ body {
 
 #layout {
   display: flex;
-  height: calc(100vh - 41px);
+  flex: 1;
+  min-height: 0;   /* 상단 바 높이와 무관하게 남은 높이를 다 쓴다 */
 }
 
 #list-panel {
@@ -120,7 +125,7 @@ input[type=range] { width: 100%; }
 #stock-list li.selected .neg,
 #stock-list li.selected .pos { color: #fff; }
 
-#detail-panel { flex: 1; overflow-y: auto; padding: 16px 20px; }
+#detail-panel { flex: 1; overflow: hidden; padding: 12px; min-width: 0; }
 .placeholder { color: var(--muted); margin-top: 40px; text-align: center; }
 
 .detail-header {
@@ -144,9 +149,9 @@ input[type=range] { width: 100%; }
 .badge.pass { background: #c6f6d5; color: #22543d; }
 .badge.fail { background: #fed7d7; color: #822727; }
 
-#chart-box { position: relative; height: 260px; margin-bottom: 16px; }
+#chart-box { position: relative; height: 100%; min-height: 200px; }
 
-.kpis { display: flex; gap: 8px; margin-bottom: 18px; }
+.kpis { display: flex; gap: 8px; }
 .kpi {
   flex: 1;
   border: 1px solid var(--border);
@@ -261,7 +266,7 @@ table.fin th:first-child, table.fin td:first-child { text-align: left; }
 #market-tabs .tab.on { background: #e2e8f0; color: #2d3748; border-color: #e2e8f0; }
 
 /* 가치평가 한 줄 */
-.valuation { color: var(--muted); font-size: 13px; margin: -8px 0 16px; }
+.valuation { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; line-height: 1.6; }
 
 /* 최근 공시 */
 .filings { list-style: none; margin: 0 0 18px; padding: 0; font-size: 13px; }
@@ -277,5 +282,78 @@ table.fin th:first-child, table.fin td:first-child { text-align: left; }
 .ftag.catalyst { background: #e9d8fd; color: #6b46c1; }
 
 /* 최근 실적 변화 */
-.interim { font-size: 13px; margin: -8px 0 16px; color: var(--muted); }
+.interim { font-size: 12.5px; margin: 0 0 10px; color: var(--muted); line-height: 1.6; }
 .interim.warn { color: #c53030; font-weight: 600; }
+
+/* --- 상세 화면 격자 (UI.pptx) ------------------------------------------
+   윗메뉴 / 차트 / 적합점수·판정근거 / 재무추이·공시. 넓은 화면에서는 한
+   화면에 들어가고, 칸이 넘치면 그 칸 안에서만 스크롤된다. */
+.detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: auto minmax(220px, 38fr) minmax(0, 27fr) minmax(0, 27fr);
+  grid-template-areas:
+    "top    top"
+    "chart  chart"
+    "score  reason"
+    "fin    filings";
+  gap: 10px;
+  height: 100%;
+}
+.cell {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow: auto;
+  min-height: 0;
+}
+.cell-top { grid-area: top; overflow: visible; padding: 10px 12px; }
+.cell-chart { grid-area: chart; padding: 8px 10px; overflow: hidden; }
+#cell-score { grid-area: score; }
+#cell-reason { grid-area: reason; }
+#cell-fin { grid-area: fin; }
+#cell-filings { grid-area: filings; }
+.cell-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: .04em;
+  position: sticky;
+  top: -10px;
+  background: #fff;
+  padding: 2px 0 4px;
+  z-index: 1;
+}
+.cell-top .detail-header { border-bottom: none; padding-bottom: 8px; margin-bottom: 0; }
+.cell-top .kpi { padding: 6px; }
+.cell-top .kpi b { font-size: 16px; }
+
+.score-total { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.score-total b { font-size: 30px; line-height: 1; }
+.score-total b.muted-big { color: var(--muted); font-weight: 400; }
+.score-total span { color: var(--muted); font-size: 12px; }
+.score-total .grade { font-size: 15px; }
+.cell .rationale { border-left: none; border-radius: 4px; }
+.cell table.fin { font-size: 12px; }
+.placeholder.small { margin-top: 12px; font-size: 12.5px; }
+
+/* 좁은 화면: 목록 위·상세 아래로 쌓고 페이지 전체를 스크롤한다. */
+@media (max-width: 900px) {
+  html, body { height: auto; }
+  #layout { flex-direction: column; }
+  #list-panel { width: 100%; min-width: 0; border-right: none;
+                border-bottom: 1px solid var(--border); }
+  #stock-list { max-height: 45vh; }
+  #detail-panel { overflow: visible; }
+  .detail-grid {
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 260px auto auto auto auto;
+    grid-template-areas: "top" "chart" "score" "reason" "fin" "filings";
+  }
+  .cell { overflow: visible; }
+  .cell-top .kpis { flex-wrap: wrap; }
+}
+.cell table.fin td:first-child, .cell table.fin th:first-child { white-space: nowrap; }

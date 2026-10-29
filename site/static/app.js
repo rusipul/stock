@@ -31,14 +31,14 @@ function money(v) {
   return v.toLocaleString("ko-KR", { maximumFractionDigits: 0 });
 }
 
-// 재무제표 금액. 미국은 10-K의 관례대로 백만 달러로 쓴다 -
-// $82,584,000,000.00은 읽을 수 없다. 한국은 지금처럼 원 단위 그대로다.
+// 재무제표 금액. 미국은 10-K의 관례대로 백만 달러, 한국은 억 원으로 쓴다 -
+// $82,584,000,000.00이나 279,604,799,000,000은 절반 폭 칸에서 읽을 수 없다.
 function amount(v) {
   if (v === null || v === undefined) return "—";
   if (state.market === "US") {
     return "$" + Math.round(v / 1e6).toLocaleString("en-US") + "M";
   }
-  return money(v);
+  return Math.round(v / 1e8).toLocaleString("ko-KR") + "억";
 }
 const signClass = (v) => (v === null || v === undefined) ? "" : (v < 0 ? "neg" : "pos");
 
@@ -341,9 +341,21 @@ function renderDetail(d, prices) {
   state.detail = { d, prices };
   const dd = drawdownOf(d);
   const panel = $("detail-panel");
-  panel.innerHTML = "";
 
-  // 헤더
+  // UI.pptx 배치: 윗메뉴 / 차트 / 적합점수·판정근거 / 재무추이·공시.
+  // 넓은 화면에서는 한 화면에 들어가고, 칸이 넘치면 그 칸 안에서만 스크롤된다.
+  panel.innerHTML = `
+    <div class="detail-grid">
+      <section class="cell cell-top" id="cell-top"></section>
+      <section class="cell cell-chart"><div id="chart-box"><canvas id="price-chart"></canvas></div></section>
+      <section class="cell" id="cell-score"><h3 class="cell-title">적합점수</h3></section>
+      <section class="cell" id="cell-reason"><h3 class="cell-title">판정근거</h3></section>
+      <section class="cell" id="cell-fin"><h3 class="cell-title">재무추이</h3></section>
+      <section class="cell" id="cell-filings"><h3 class="cell-title">최근 공시</h3></section>
+    </div>`;
+
+  // --- 윗메뉴: 종목 헤더 + 핵심 수치 -------------------------------------
+  const top = $("cell-top");
   const header = document.createElement("div");
   header.className = "detail-header";
   header.innerHTML = `
@@ -354,20 +366,13 @@ function renderDetail(d, prices) {
     </span>
     <span style="flex:1"></span>
     <span class="star" id="detail-star">${d.in_watchlist ? "★" : "☆"}</span>`;
-  panel.appendChild(header);
+  top.appendChild(header);
   header.querySelector("#detail-star").onclick = async () => {
     const row = state.rows.find((r) => r.ticker === d.ticker);
     if (row) { await toggleWatch(row); d.in_watchlist = row.in_watchlist; }
     header.querySelector("#detail-star").textContent = d.in_watchlist ? "★" : "☆";
   };
 
-  // 차트
-  const box = document.createElement("div");
-  box.id = "chart-box";
-  box.innerHTML = `<canvas id="price-chart"></canvas>`;
-  panel.appendChild(box);
-
-  // KPI
   const kpis = document.createElement("div");
   kpis.className = "kpis";
   kpis.innerHTML = [
@@ -382,42 +387,27 @@ function renderDetail(d, prices) {
       ? kpi(dd.stabilized ? "멈춤" : "하락 중",
             `저점 후 ${dd.days_since_low}거래일`, dd.stabilized ? "pos" : "neg")
       : kpi("—", "하락 상태", "", true),
-    d.score_total === null
-      ? kpi("—", "우량주 점수", "", true)
-      : kpi(d.score_total.toFixed(0), "우량주 점수"),
   ].join("");
-  panel.appendChild(kpis);
+  top.appendChild(kpis);
 
-  // 최근 실적 변화. 5년 평균 점수가 최근 악화를 가릴 수 있다.
-  if (d.interim) {
-    const it = d.interim;
-    const rec = document.createElement("p");
-    rec.className = "interim" + (it.deteriorated ? " warn" : "");
-    const g = (v) => (v === null || v === undefined) ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(0) + "%";
-    rec.textContent =
-      `최근 실적 (${it.period_end.slice(0, 4)}년 ${it.months}개월 누적, 전년 동기 대비): `
-      + `매출 ${g(it.revenue_growth)} · 영업이익 ${g(it.operating_income_growth)}`
-      + ` · 영업이익률 ${pct(it.operating_margin_prior)} → ${pct(it.operating_margin)}`
-      + (it.deteriorated ? " · 주의: 최근 실적 급감" : "");
-    panel.appendChild(rec);
+  // --- 적합점수: 총점 · 축별 막대 · 가치평가 --------------------------------
+  const score = $("cell-score");
+  const grade = gradeOf(d);
+  const total = document.createElement("div");
+  total.className = "score-total";
+  total.innerHTML = d.score_total === null
+    ? `<b class="muted-big">—</b><span>${d.passed_filters ? "재무 데이터 없음" : "제외되어 채점하지 않음"}</span>`
+    : `<b>${d.score_total.toFixed(0)}</b><span>/ 100 우량주 점수</span>`
+      + (grade ? `<span class="grade ${grade.toLowerCase()}">${GRADE_BADGES[grade]}</span>` : "");
+  score.appendChild(total);
+  // 점수 분해 (설계서 §11.2). 제외된 종목은 채점하지 않았으므로 막대가 없다.
+  if (d.score_detail) {
+    const bars = document.createElement("div");
+    bars.className = "score-bars";
+    bars.title = "점수 분해";
+    bars.innerHTML = scoreBars(d.score_detail);
+    score.appendChild(bars);
   }
-
-  // 최근 공시. 하락 원인과 회복 계기는 사람이 판단한다 - 그 재료를 보인다.
-  if (d.filings && d.filings.length) {
-    panel.appendChild(sectionTitle("최근 공시"));
-    const ul = document.createElement("ul");
-    ul.className = "filings";
-    for (const f of d.filings) {
-      const li = document.createElement("li");
-      const tag = FILING_LABELS[f.category];
-      li.innerHTML = `<span class="fdate">${escapeHtml(f.filed)}</span>`
-        + (tag ? `<span class="ftag ${f.category.toLowerCase()}">${tag}</span>` : "")
-        + `<a href="${escapeHtml(f.url)}" target="_blank" rel="noopener">${escapeHtml(f.title)}</a>`;
-      ul.appendChild(li);
-    }
-    panel.appendChild(ul);
-  }
-
   // 가치평가. 많이 떨어졌어도 여전히 비쌀 수 있다. 점수에는 넣지 않는다(§8.2).
   const val = document.createElement("p");
   val.className = "valuation";
@@ -430,32 +420,56 @@ function renderDetail(d, prices) {
     dd && dd.period_return !== null && dd.period_return !== undefined
       ? `${state.months}개월 수익률 ${pct(dd.period_return)}` : null,
   ].filter(Boolean).join(" · ");
-  panel.appendChild(val);
+  score.appendChild(val);
 
-  // 점수 분해 (설계서 §11.2). 제외된 종목은 채점하지 않았으므로 막대가 없다.
-  if (d.score_detail) {
-    panel.appendChild(sectionTitle("점수 분해"));
-    const bars = document.createElement("div");
-    bars.className = "score-bars";
-    bars.innerHTML = scoreBars(d.score_detail);
-    panel.appendChild(bars);
-  }
-
-  // 판정 근거
-  panel.appendChild(sectionTitle("판정 근거"));
+  // --- 판정근거 -----------------------------------------------------------
   const rat = document.createElement("div");
   rat.className = "rationale";
   rat.innerHTML = d.rationale.map((line) => `<div>${escapeHtml(line)}</div>`).join("");
-  panel.appendChild(rat);
+  $("cell-reason").appendChild(rat);
 
-  // 재무 추이
-  panel.appendChild(sectionTitle("재무 추이"));
+  // --- 재무추이: 최근 실적 변화 + 연도별 표 ---------------------------------
+  const fin = $("cell-fin");
+  // 최근 실적 변화. 5년 평균 점수가 최근 악화를 가릴 수 있다.
+  if (d.interim) {
+    const it = d.interim;
+    const rec = document.createElement("p");
+    rec.className = "interim" + (it.deteriorated ? " warn" : "");
+    const g = (v) => (v === null || v === undefined) ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(0) + "%";
+    rec.textContent =
+      `최근 실적 (${it.period_end.slice(0, 4)}년 ${it.months}개월 누적, 전년 동기 대비): `
+      + `매출 ${g(it.revenue_growth)} · 영업이익 ${g(it.operating_income_growth)}`
+      + ` · 영업이익률 ${pct(it.operating_margin_prior)} → ${pct(it.operating_margin)}`
+      + (it.deteriorated ? " · 주의: 최근 실적 급감" : "");
+    fin.appendChild(rec);
+  }
   if (!d.financials.length) {
     const box2 = document.createElement("div");
     box2.innerHTML = state.market === "US" ? EDGAR_GUIDE : DART_GUIDE;
-    panel.appendChild(box2);
+    fin.appendChild(box2);
   } else {
-    panel.appendChild(financialsTable(d.financials));
+    fin.appendChild(financialsTable(d.financials));
+  }
+
+  // --- 최근 공시. 하락 원인과 회복 계기는 사람이 판단한다 - 그 재료를 보인다.
+  const fil = $("cell-filings");
+  if (d.filings && d.filings.length) {
+    const ul = document.createElement("ul");
+    ul.className = "filings";
+    for (const f of d.filings) {
+      const li = document.createElement("li");
+      const tag = FILING_LABELS[f.category];
+      li.innerHTML = `<span class="fdate">${escapeHtml(f.filed)}</span>`
+        + (tag ? `<span class="ftag ${f.category.toLowerCase()}">${tag}</span>` : "")
+        + `<a href="${escapeHtml(f.url)}" target="_blank" rel="noopener">${escapeHtml(f.title)}</a>`;
+      ul.appendChild(li);
+    }
+    fil.appendChild(ul);
+  } else {
+    const none = document.createElement("p");
+    none.className = "placeholder small";
+    none.textContent = "최근 1년 공시가 없습니다";
+    fil.appendChild(none);
   }
 
   drawChart(prices);
@@ -560,7 +574,11 @@ function escapeHtml(s) {
   ));
 }
 
-function financialsTable(rows) {
+// 재무추이 칸은 화면 절반 폭이라 최근 몇 해만 보인다 (수집은 10년치).
+const FIN_YEARS_SHOWN = 5;
+
+function financialsTable(allRows) {
+  const rows = allRows.slice(-FIN_YEARS_SHOWN);
   const table = document.createElement("table");
   table.className = "fin";
   const years = rows.map((r) => r.fiscal_year);
