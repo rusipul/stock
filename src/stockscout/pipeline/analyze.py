@@ -182,6 +182,7 @@ def analyze_market(
             config_json=json.dumps(config.model_dump(mode="json"),
                                    sort_keys=True, ensure_ascii=False),
             note=note,
+            market=market,
         )
         summary.snapshot_id = repo.save_snapshot(snapshot, results)
     return summary

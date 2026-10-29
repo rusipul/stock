@@ -31,7 +31,22 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     _add_snapshots_as_of_column_if_missing(conn)
     _add_financials_columns_if_missing(conn)
+    _add_snapshots_market_column_if_missing(conn)
     conn.commit()
+
+
+def _add_snapshots_market_column_if_missing(conn: sqlite3.Connection) -> None:
+    """계획 E가 더한 컬럼을 기존 DB에 얹는다.
+
+    계획 E 이전 스냅샷은 전부 한국 것이므로 DEFAULT 'KR'이 그대로 맞는
+    값이다. SQLite는 NOT NULL 컬럼도 DEFAULT가 있으면 ADD COLUMN을 허용하고
+    기존 행을 그 값으로 채운다.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)")}
+    if "market" not in columns:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN market TEXT NOT NULL DEFAULT 'KR'"
+        )
 
 
 def _add_snapshots_as_of_column_if_missing(conn: sqlite3.Connection) -> None:

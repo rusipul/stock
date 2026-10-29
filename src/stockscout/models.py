@@ -246,6 +246,9 @@ class Snapshot(BaseModel):
     config_hash: str
     config_json: str
     note: str | None = None
+    # 시장마다 기준일·통화·수집 시점이 달라 따로 저장한다 (설계서 §18.5).
+    # 기본값이 KR인 이유: 계획 E 이전 코드와 스냅샷은 전부 한국 것이다.
+    market: str = "KR"
 
 
 # 지표·축 상태 (설계서 §8.2·§8.3)

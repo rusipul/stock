@@ -440,3 +440,45 @@ def test_first_price_date_is_scoped_to_ticker(repo):
     )
 
     assert repo.first_price_date("005930.KS") == date(2022, 1, 1)
+
+
+# --- 시장별 스냅샷 (계획 E) -------------------------------------------
+
+
+def _snap(market, run_at):
+    from stockscout.models import Snapshot
+
+    return Snapshot(run_at=run_at, as_of="2026-09-10", config_hash="h",
+                    config_json="{}", market=market)
+
+
+def test_latest_snapshot_is_scoped_to_market(repo):
+    """미국을 나중에 분석해도 한국의 최신 스냅샷은 한국 것이어야 한다."""
+    kr = repo.save_snapshot(_snap("KR", "2026-09-11T00:00:00+00:00"), [])
+    us = repo.save_snapshot(_snap("US", "2026-09-12T00:00:00+00:00"), [])
+
+    assert repo.get_latest_snapshot(market="KR").snapshot_id == kr
+    assert repo.get_latest_snapshot(market="US").snapshot_id == us
+    assert repo.get_latest_snapshot(market="KR").market == "KR"
+
+
+def test_latest_snapshot_without_market_is_the_newest_of_all(repo):
+    repo.save_snapshot(_snap("KR", "2026-09-11T00:00:00+00:00"), [])
+    us = repo.save_snapshot(_snap("US", "2026-09-12T00:00:00+00:00"), [])
+
+    assert repo.get_latest_snapshot().snapshot_id == us
+
+
+def test_latest_snapshot_is_none_for_a_market_never_analyzed(repo):
+    repo.save_snapshot(_snap("KR", "2026-09-11T00:00:00+00:00"), [])
+
+    assert repo.get_latest_snapshot(market="US") is None
+
+
+def test_snapshot_market_defaults_to_kr():
+    """market을 넘기지 않는 기존 코드는 한국 스냅샷을 만든다."""
+    from stockscout.models import Snapshot
+
+    snap = Snapshot(run_at="x", config_hash="h", config_json="{}")
+
+    assert snap.market == "KR"

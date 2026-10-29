@@ -61,10 +61,11 @@ CREATE TABLE IF NOT EXISTS snapshots (
   config_hash TEXT NOT NULL,
   config_json TEXT NOT NULL,
   note        TEXT,
-  as_of       TEXT   -- 이 스냅샷이 고정한 가격 기준일. run_at(실행 시각)과는
+  as_of       TEXT,  -- 이 스냅샷이 고정한 가격 기준일. run_at(실행 시각)과는
                       -- 별개다: 수집을 며칠 건너뛰면 run_at은 흘러가도
                       -- as_of는 그대로일 수 있다. 기존 DB는 store/db.py의
                       -- init_db()가 ALTER TABLE로 얹어주므로 NULL 허용이다.
+  market      TEXT NOT NULL DEFAULT 'KR'  -- 시장마다 따로 분석·저장한다 (설계서 §18.5)
 );
 
 CREATE TABLE IF NOT EXISTS analysis_results (

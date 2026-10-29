@@ -539,6 +539,15 @@ def test_analyze_as_of_is_scoped_to_market(repo):
     assert summary.as_of == date(2026, 9, 10)
 
 
+def test_analyze_records_the_market_on_the_snapshot(repo):
+    seed(repo, "AAPL", market="US")
+
+    summary = analyze_market(repo, market="US", config=cfg())
+
+    assert repo.get_latest_snapshot(market="US").snapshot_id == summary.snapshot_id
+    assert repo.get_latest_snapshot(market="KR") is None
+
+
 def test_analyze_coverage_calendar_is_scoped_to_market(repo):
     """다른 시장의 거래일이 커버리지 분모에 섞이면 안 된다.
 
