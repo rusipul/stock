@@ -260,3 +260,53 @@ def test_hard_filter_year_counts_are_rejected_through_yaml(tmp_path):
 
     with pytest.raises(ValidationError):
         load_config(path)
+
+
+# --- 시장별 비밀값 (계획 E) -------------------------------------------
+
+
+def test_us_does_not_require_a_dart_key(tmp_path, monkeypatch):
+    """미국만 수집하는데 DART 키가 없다고 죽으면 안 된다."""
+    monkeypatch.delenv("DART_API_KEY", raising=False)
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("SEC_USER_AGENT=stockscout me@example.com\n", encoding="utf-8")
+
+    secrets = load_secrets(env, market="US")
+
+    assert secrets.sec_user_agent == "stockscout me@example.com"
+    assert secrets.dart_api_key is None
+
+
+def test_us_requires_a_contact_in_the_user_agent(tmp_path, monkeypatch):
+    """SEC는 연락처 없는 User-Agent를 403으로 막는다 (설계서 §18.2)."""
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("SEC_USER_AGENT=stockscout/0.1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="SEC_USER_AGENT"):
+        load_secrets(env, market="US")
+
+
+def test_us_requires_a_user_agent_at_all(tmp_path, monkeypatch):
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("DART_API_KEY=abc\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="SEC_USER_AGENT"):
+        load_secrets(env, market="US")
+
+
+def test_kr_is_still_the_default_market(tmp_path, monkeypatch):
+    """기존 호출(load_secrets(env))은 지금처럼 DART 키를 요구한다."""
+    monkeypatch.delenv("DART_API_KEY", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("SEC_USER_AGENT=stockscout me@example.com\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="DART_API_KEY"):
+        load_secrets(env)
+
+
+def test_unknown_market_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="XX"):
+        load_secrets(tmp_path / ".env", market="XX")
