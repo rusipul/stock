@@ -13,6 +13,7 @@ const state = {
   minScore: 70,
   detail: null,       // 열려 있는 상세(기간을 바꾸면 다시 그린다)
   chartPeriod: "all", // 차트 기간 버튼: "all" 또는 개월 수
+  chartInterval: "D", // 봉 주기: D 일봉 · W 주봉 · M 월봉
   chartFull: null,    // 확대 전 전체 차트 데이터 {labels, data: [[...], ...]}
   chartView: null,    // 보이는 구간 [i0, i1] (전체 기준 인덱스)
   drag: null,         // 드래그 확대 중인 구간 {x0, x1}
@@ -57,6 +58,8 @@ function loadPrefs() {
     if (saved !== null) state.dropThreshold = parseFloat(saved);
     const months = parseInt(localStorage.getItem("stockscout.ddMonths"), 10);
     if (months > 0) state.months = months;
+    const interval = localStorage.getItem("stockscout.chartInterval");
+    if (["D", "W", "M"].includes(interval)) state.chartInterval = interval;
     const period = localStorage.getItem("stockscout.chartPeriod");
     if (period === "all") state.chartPeriod = "all";
     else if (Number(period) > 0) state.chartPeriod = Number(period);
@@ -77,6 +80,7 @@ function savePrefs() {
     localStorage.setItem("stockscout.ddMonths", String(state.months));
     localStorage.setItem("stockscout.mode", state.mode);
     localStorage.setItem("stockscout.chartPeriod", String(state.chartPeriod));
+    localStorage.setItem("stockscout.chartInterval", state.chartInterval);
     localStorage.setItem("stockscout.sense", JSON.stringify(state.sense));
     localStorage.setItem("stockscout.minScore", String(state.minScore));
     localStorage.setItem("stockscout.market", state.market);
@@ -480,6 +484,8 @@ function renderDetail(d, prices) {
       <section class="cell cell-chart">
         <div class="chart-tools" id="chart-tools"></div>
         <div id="chart-box"><canvas id="price-chart"></canvas></div>
+        <input id="chart-scroll" type="range" min="0" max="0" value="0" hidden
+               aria-label="차트 구간 이동">
       </section>
       <section class="cell" id="cell-score"><h3 class="cell-title">적합점수</h3></section>
       <section class="cell" id="cell-reason"><h3 class="cell-title">판정근거</h3></section>
@@ -773,6 +779,10 @@ function financialsTable(allRows) {
   return table;
 }
 
+// 캔들 색: 국내 관례(상승 빨강 · 하락 파랑).
+const CANDLE_UP = "#e53e3e";
+const CANDLE_DOWN = "#3182ce";
+
 function drawChart(p) {
   if (state.chart) state.chart.destroy();
 
@@ -792,15 +802,46 @@ function drawChart(p) {
     ["1년 평균", p.avg_price_1y, "#dd6b20"],
   ].filter(([, v]) => v !== null && v !== undefined);
 
-  const labels = p.series.map((x) => x.date);
+  // 일봉 -> 주봉·월봉. 시가·고가·저가가 없는 옛 데이터는 종가선으로 그린다.
+  // 거래정지일처럼 시가·고가·저가가 빈 봉이 섞여 있어도 대부분(90%) 있으면
+  // 캔들로 그리고, 빈 봉은 종가로 채운다 - 하루 때문에 차트 전체가 선이 되면 안 된다.
+  const raw = aggregateBars(p.series, state.chartInterval);
+  const withOhlc = raw.filter((b) => b.open !== null && b.open !== undefined).length;
+  const hasOhlc = raw.length > 0 && withOhlc >= raw.length * 0.9;
+  const bars = raw.map((b) => (b.open !== null && b.open !== undefined ? b
+    : { ...b, open: b.close, high: b.close, low: b.close }));
+  const labels = bars.map((b) => b.date);
+  const closes = bars.map((b) => b.close);
+  const upColors = bars.map((b) => (hasOhlc && b.close < b.open ? CANDLE_DOWN : CANDLE_UP));
+
+  // 0번은 항상 종가다. 안내창·가로선·가격축 맞춤이 이 데이터셋을 본다.
+  // 캔들일 때는 선을 감추고 막대(몸통·꼬리)로 그린다.
   const datasets = [{
     label: "종가",
-    data: p.series.map((x) => x.close),
-    borderColor: "#2b6cb0",
-    borderWidth: 1.4,
+    data: closes,
+    borderColor: hasOhlc ? "rgba(0,0,0,0)" : "#2b6cb0",
+    borderWidth: hasOhlc ? 0 : 1.4,
     pointRadius: 0,
     tension: 0,
+    yAxisID: "y",
   }];
+  if (hasOhlc) {
+    datasets.push({
+      type: "bar", label: "꼬리", candle: "wick",
+      data: bars.map((b) => [b.low, b.high]),
+      backgroundColor: upColors, borderWidth: 0,
+      // grouped: false - 꼬리·몸통·거래량을 한 칸에 나란히 놓지 않고 겹쳐 그린다.
+      // 기본값(true)이면 꼬리가 몸통 옆에 붙는다.
+      grouped: false, barPercentage: 0.18, categoryPercentage: 1.0, yAxisID: "y", order: 2,
+    });
+    datasets.push({
+      type: "bar", label: "봉", candle: "body",
+      data: bars.map((b) => [Math.min(b.open, b.close), Math.max(b.open, b.close)
+                                                       + (b.open === b.close ? 1e-9 : 0)]),
+      backgroundColor: upColors, borderWidth: 0,
+      grouped: false, barPercentage: 0.8, categoryPercentage: 1.0, yAxisID: "y", order: 1,
+    });
+  }
   for (const [label, value, color] of refs) {
     datasets.push({
       label: `${label} ${money(value)}`,
@@ -813,22 +854,27 @@ function drawChart(p) {
     });
   }
   // 거래량 막대. 아래쪽 4분의 1만 쓰도록 축 최대값을 키운다 (첨부 차트처럼).
-  const volumes = p.series.map((x) => x.volume ?? null);
+  const volumes = bars.map((b) => b.volume ?? null);
   const maxVol = Math.max(0, ...volumes.filter((v) => v !== null));
   if (maxVol > 0) {
     datasets.push({
       type: "bar",
       label: "거래량",
       data: volumes,
-      backgroundColor: "rgba(113, 128, 150, 0.35)",
+      backgroundColor: hasOhlc ? upColors.map((c) => c + "55") : "rgba(113, 128, 150, 0.35)",
       borderWidth: 0,
+      grouped: false, barPercentage: 0.8, categoryPercentage: 1.0,
       yAxisID: "yv",
       order: 9,
     });
   }
 
-  // 확대 전 전체 데이터. 확대는 이 배열을 잘라 보여 준다.
-  state.chartFull = { labels, data: datasets.map((ds) => ds.data) };
+  // 확대 전 전체 데이터. 확대·이동은 이 배열을 잘라 보여 준다.
+  state.chartFull = {
+    labels, bars, hasOhlc,
+    data: datasets.map((ds) => ds.data),
+    colors: datasets.map((ds) => (Array.isArray(ds.backgroundColor) ? ds.backgroundColor : null)),
+  };
   state.drag = null;
 
   state.chart = new Chart($("price-chart"), {
@@ -843,12 +889,18 @@ function drawChart(p) {
       maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
       plugins: {
-        legend: { labels: { boxWidth: 12, font: { size: 11 } } },
-        // 안내창에는 종가와 거래량만. 기준선은 범례에 값이 이미 있다.
-        tooltip: { filter: (item) => item.datasetIndex === 0 || item.dataset.yAxisID === "yv" },
+        legend: { labels: { boxWidth: 12, font: { size: 11 },
+                            filter: (item, data) => !data.datasets[item.datasetIndex].candle
+                              && !(hasOhlc && item.datasetIndex === 0) } },
+        // 안내창에는 시가·고가·저가·종가와 거래량만. 기준선은 범례에 값이 이미 있다.
+        tooltip: {
+          filter: (item) => item.datasetIndex === 0 || item.dataset.yAxisID === "yv",
+          callbacks: { label: (item) => chartTooltipLabel(item) },
+        },
       },
       scales: {
-        x: { ticks: { maxTicksLimit: 8, font: { size: 10 } }, grid: { display: false } },
+        x: { stacked: false, ticks: { maxTicksLimit: 8, font: { size: 10 } },
+             grid: { display: false } },
         y: { ticks: { font: { size: 10 }, callback: (v) => money(v) } },
         yv: { display: false, beginAtZero: true, max: maxVol * 4 || undefined,
               grid: { display: false } },
@@ -862,9 +914,72 @@ function drawChart(p) {
   canvas.onmouseup = (e) => onChartMouseUp(e);
   canvas.ondblclick = () => onChartDoubleClick();
   canvas.onmouseleave = () => onChartMouseLeave();
+  canvas.onwheel = (e) => onChartWheel(e);
+  $("chart-scroll").oninput = () => onChartScroll();
   renderChartTools();
   const [i0, i1] = periodRange(labels, state.chartPeriod);
   applyChartRange(i0, i1);
+}
+
+// 안내창 한 줄. 종가 데이터셋은 캔들이면 시가·고가·저가·종가를 함께 보인다.
+function chartTooltipLabel(item) {
+  if (item.dataset.yAxisID === "yv") {
+    return `거래량 ${item.raw === null ? "—" : Number(item.raw).toLocaleString("ko-KR")}`;
+  }
+  const full = state.chartFull;
+  const b = full && state.chartView ? full.bars[state.chartView[0] + item.dataIndex] : null;
+  if (b && full.hasOhlc) {
+    return `시 ${money(b.open)} · 고 ${money(b.high)} · 저 ${money(b.low)} · 종 ${money(b.close)}`;
+  }
+  return `종가 ${money(item.raw)}`;
+}
+
+// --- 봉 주기 -------------------------------------------------------------
+
+const CHART_INTERVALS = [["D", "일봉"], ["W", "주봉"], ["M", "월봉"]];
+
+// 날짜(YYYY-MM-DD)가 속한 묶음의 열쇠. 주봉은 그 주 월요일(UTC로 계산 -
+// 연도로 자르면 연말연시 한 주가 둘로 갈린다), 월봉은 YYYY-MM.
+function periodKey(dateText, interval) {
+  if (interval === "M") return dateText.slice(0, 7);
+  const [y, m, d] = dateText.split("-").map(Number);
+  const t = Date.UTC(y, m - 1, d);
+  const weekday = (new Date(t).getUTCDay() + 6) % 7;   // 월요일 = 0
+  return new Date(t - weekday * 86400000).toISOString().slice(0, 10);
+}
+
+// 일봉을 주봉·월봉으로 묶는다. 시가 = 첫날 시가, 고가 = 최고, 저가 = 최저,
+// 종가 = 마지막 날 종가, 거래량 = 합. 묶음의 날짜는 그 묶음의 마지막 거래일이다.
+// 시가·고가·저가가 없는 날은 종가로 대신한다(그 묶음의 봉이 덜 정확해질 뿐이다).
+function aggregateBars(series, interval) {
+  if (interval === "D") return series;
+  const out = [];
+  let key = null, cur = null;
+  for (const x of series) {
+    const k = periodKey(x.date, interval);
+    const hi = x.high ?? x.close, lo = x.low ?? x.close;
+    if (k !== key) {
+      if (cur) out.push(cur);
+      key = k;
+      cur = { date: x.date, open: x.open ?? x.close, high: hi, low: lo,
+              close: x.close, volume: x.volume ?? null };
+    } else {
+      cur.date = x.date;
+      cur.high = Math.max(cur.high, hi);
+      cur.low = Math.min(cur.low, lo);
+      cur.close = x.close;
+      if (x.volume !== null && x.volume !== undefined) cur.volume = (cur.volume ?? 0) + x.volume;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+function onChartInterval(key) {
+  if (state.chartInterval === key || !state.detail) return;
+  state.chartInterval = key;
+  savePrefs();
+  drawChart(state.detail.prices);
 }
 
 // --- 차트 확대 ------------------------------------------------------------
@@ -885,19 +1000,31 @@ function periodRange(dates, months) {
   return [Math.max(start, 0), end];
 }
 
-// 전체 데이터에서 [i0, i1]만 보이게 한다. 가격축은 Chart.js가 보이는 구간에
-// 맞춰 다시 잡고, 거래량축은 보이는 구간의 최대값으로 다시 맞춘다.
+// 보이는 구간 [i0, i1]을 폭은 그대로 shift만큼 옮긴다. 양 끝에서 멈춘다.
+function panRange(view, total, shift) {
+  const len = view[1] - view[0];
+  const i0 = Math.min(Math.max(view[0] + shift, 0), Math.max(total - 1 - len, 0));
+  return [i0, i0 + len];
+}
+
+// 전체 데이터에서 [i0, i1]만 보이게 한다. 가격축은 보이는 구간의 저가·고가
+// (캔들이 아니면 종가)에 맞추고, 거래량축은 보이는 구간의 최대값으로 맞춘다.
 function applyChartRange(i0, i1) {
   const chart = state.chart, full = state.chartFull;
   if (!chart || !full) return;
   state.chartView = [i0, i1];
   chart.data.labels = full.labels.slice(i0, i1 + 1);
-  chart.data.datasets.forEach((ds, k) => { ds.data = full.data[k].slice(i0, i1 + 1); });
-  // 가격축은 보이는 구간의 종가에 맞춘다. 5년 고점 같은 먼 기준선까지 담으면
-  // 확대해도 가격선이 납작해진다 - 범위 밖 기준선은 잘린다.
-  const closes = chart.data.datasets[0].data.filter((v) => v !== null && v !== undefined);
-  if (closes.length) {
-    const lo = Math.min(...closes), hi = Math.max(...closes);
+  chart.data.datasets.forEach((ds, k) => {
+    ds.data = full.data[k].slice(i0, i1 + 1);
+    if (full.colors[k]) ds.backgroundColor = full.colors[k].slice(i0, i1 + 1);
+  });
+  // 5년 고점 같은 먼 기준선까지 담으면 확대해도 가격선이 납작해진다 - 범위 밖
+  // 기준선은 잘린다.
+  const visible = full.bars.slice(i0, i1 + 1);
+  const highs = visible.map((b) => (full.hasOhlc ? b.high : b.close));
+  const lows = visible.map((b) => (full.hasOhlc ? b.low : b.close));
+  if (highs.length) {
+    const lo = Math.min(...lows), hi = Math.max(...highs);
     const pad = (hi - lo) * 0.08 || hi * 0.02;
     chart.options.scales.y.min = lo - pad;
     chart.options.scales.y.max = hi + pad;
@@ -909,6 +1036,38 @@ function applyChartRange(i0, i1) {
   }
   chart.update("none");
   renderChartTools();
+  syncChartScroll();
+}
+
+// 스크롤바: 보이는 구간이 전체보다 좁을 때만 보인다. 값 = 보이는 구간의 시작.
+function syncChartScroll() {
+  const bar = $("chart-scroll"), full = state.chartFull, view = state.chartView;
+  if (!bar || !full || !view) return;
+  const len = view[1] - view[0];
+  const room = full.labels.length - 1 - len;
+  bar.hidden = room <= 0;
+  bar.max = String(Math.max(room, 0));
+  bar.value = String(view[0]);
+}
+
+function onChartScroll() {
+  const full = state.chartFull, view = state.chartView;
+  if (!full || !view) return;
+  const len = view[1] - view[0];
+  const i0 = Number($("chart-scroll").value);
+  applyChartRange(i0, i0 + len);
+}
+
+// 휠: 확대해 있을 때만 앞뒤로 옮긴다(보이는 폭의 10%씩). 전체를 보고 있으면
+// 페이지 스크롤을 막지 않는다.
+function onChartWheel(e) {
+  const full = state.chartFull, view = state.chartView;
+  if (!full || !view || view[1] - view[0] + 1 >= full.labels.length) return;
+  e.preventDefault();
+  const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+  const step = Math.max(1, Math.round((view[1] - view[0]) * 0.1));
+  const [i0, i1] = panRange(view, full.labels.length, Math.sign(delta) * step);
+  applyChartRange(i0, i1);
 }
 
 function renderChartTools() {
@@ -918,6 +1077,16 @@ function renderChartTools() {
   const zoomed = full && view
     && JSON.stringify(view) !== JSON.stringify(periodRange(full.labels, state.chartPeriod));
   tools.innerHTML = "";
+  for (const [key, label] of CHART_INTERVALS) {
+    const b = document.createElement("button");
+    b.className = "ptab interval" + (state.chartInterval === key ? " on" : "");
+    b.textContent = label;
+    b.onclick = () => onChartInterval(key);
+    tools.appendChild(b);
+  }
+  const sep = document.createElement("span");
+  sep.className = "chart-sep";
+  tools.appendChild(sep);
   for (const [key, label] of CHART_PERIODS) {
     const b = document.createElement("button");
     b.className = "ptab" + (!zoomed && state.chartPeriod === key ? " on" : "");
@@ -928,8 +1097,8 @@ function renderChartTools() {
   const hint = document.createElement("span");
   hint.className = "chart-hint";
   hint.textContent = zoomed && view
-    ? `${full.labels[view[0]]} ~ ${full.labels[view[1]]} 확대 중 · 더블클릭하면 원래대로`
-    : "차트를 드래그하면 그 구간을 확대합니다";
+    ? `${full.labels[view[0]]} ~ ${full.labels[view[1]]} · 휠·아래 막대로 이동 · 더블클릭하면 원래대로`
+    : "드래그하면 그 구간을 확대합니다";
   tools.appendChild(hint);
 }
 

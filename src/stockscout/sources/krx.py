@@ -14,6 +14,7 @@ from stockscout.models import PriceBar, Security
 
 KOSPI200_INDEX_CODE = "1028"
 CLOSE_COLUMN = "종가"
+OPEN_COLUMN, HIGH_COLUMN, LOW_COLUMN = "시가", "고가", "저가"
 VOLUME_COLUMN = "거래량"
 
 
@@ -68,9 +69,22 @@ class KrxPriceSource:
                     date=pd.Timestamp(idx).date(),
                     close=close,
                     volume=int(volume) if volume is not None and not pd.isna(volume) else None,
+                    **_ohlc(row, OPEN_COLUMN, HIGH_COLUMN, LOW_COLUMN),
                 )
             )
         return bars
+
+
+def _ohlc(row, open_col: str, high_col: str, low_col: str) -> dict:
+    """캔들용 시가·고가·저가. 없거나 0 이하(거래 없이 종가만 이어진 날)면 None."""
+    out = {}
+    for key, col in (("open", open_col), ("high", high_col), ("low", low_col)):
+        value = row.get(col)
+        out[key] = (float(value) if value is not None and not pd.isna(value)
+                    and float(value) > 0 else None)
+    if None in out.values():
+        return {"open": None, "high": None, "low": None}
+    return out
 
 
 def _default_portfolio_fn(index_code: str) -> list[str]:

@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS raw_prices (
   close  REAL NOT NULL,
   volume INTEGER,
   source TEXT NOT NULL,
+  open   REAL,    -- 캔들 표시용 수정 시가·고가·저가 (분석은 종가만 쓴다)
+  high   REAL,
+  low    REAL,
   PRIMARY KEY (ticker, date)
 );
 

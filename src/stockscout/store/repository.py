@@ -151,12 +151,14 @@ class Repository:
     def save_price_bars(self, bars: list[PriceBar], source: str) -> None:
         self.conn.executemany(
             """
-            INSERT INTO raw_prices (ticker, date, close, volume, source)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO raw_prices (ticker, date, close, volume, source, open, high, low)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ticker, date) DO UPDATE SET
-                close=excluded.close, volume=excluded.volume, source=excluded.source
+                close=excluded.close, volume=excluded.volume, source=excluded.source,
+                open=excluded.open, high=excluded.high, low=excluded.low
             """,
-            [(b.ticker, b.date.isoformat(), b.close, b.volume, source) for b in bars],
+            [(b.ticker, b.date.isoformat(), b.close, b.volume, source,
+              b.open, b.high, b.low) for b in bars],
         )
         self.conn.commit()
 
@@ -179,6 +181,9 @@ class Repository:
                 date=date.fromisoformat(r["date"]),
                 close=r["close"],
                 volume=r["volume"],
+                open=r["open"] if "open" in r.keys() else None,
+                high=r["high"] if "high" in r.keys() else None,
+                low=r["low"] if "low" in r.keys() else None,
             )
             for r in rows
         ]

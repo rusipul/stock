@@ -271,7 +271,7 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                 ticker=ticker,
                 as_of=snap.as_of,
                 series=[PricePoint(date=b.date.isoformat(), close=b.close,
-                                   volume=b.volume)
+                                   volume=b.volume, open=b.open, high=b.high, low=b.low)
                         for b in bars],
                 price_current=row["price_current"],
                 avg_price_1y=row["avg_price_1y"],

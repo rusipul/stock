@@ -13,6 +13,7 @@ from typing import Callable
 import pandas as pd
 
 from stockscout.models import PriceBar
+from stockscout.sources.krx import _ohlc
 
 CLOSE_COLUMN = "Close"
 VOLUME_COLUMN = "Volume"
@@ -59,5 +60,6 @@ class YahooPriceSource:
                 date=pd.Timestamp(idx).date(),
                 close=close,
                 volume=int(volume) if volume is not None and not pd.isna(volume) else None,
+                **_ohlc(row, "Open", "High", "Low"),
             ))
         return bars

@@ -111,3 +111,31 @@ def test_universe_skips_tickers_whose_name_lookup_fails():
 def test_kosdaq_codes_get_the_kq_suffix():
     assert to_ticker("247540", exchange="KOSDAQ") == "247540.KQ"
     assert to_ticker("247540.KQ", exchange="KOSDAQ") == "247540.KQ"
+
+
+
+def test_krx_keeps_open_high_low_for_candles():
+    import pandas as pd
+
+    df = pd.DataFrame({"시가": [100.0], "고가": [110.0], "저가": [95.0],
+                       "종가": [105.0], "거래량": [1000]},
+                      index=pd.DatetimeIndex(["2026-09-10"]))
+
+    (bar,) = KrxPriceSource(ohlcv_fn=lambda *a, **k: df).fetch_daily(
+        "005930.KS", date(2026, 9, 10), date(2026, 9, 10))
+
+    assert (bar.open, bar.high, bar.low, bar.close) == (100.0, 110.0, 95.0, 105.0)
+
+
+def test_krx_zero_open_high_low_mean_unknown():
+    """거래 없이 종가만 이어진 날은 시가·고가·저가가 0으로 온다. 봉을 그리지 않는다."""
+    import pandas as pd
+
+    df = pd.DataFrame({"시가": [0.0], "고가": [0.0], "저가": [0.0],
+                       "종가": [105.0], "거래량": [0]},
+                      index=pd.DatetimeIndex(["2026-09-10"]))
+
+    (bar,) = KrxPriceSource(ohlcv_fn=lambda *a, **k: df).fetch_daily(
+        "005930.KS", date(2026, 9, 10), date(2026, 9, 10))
+
+    assert bar.open is None and bar.high is None and bar.low is None

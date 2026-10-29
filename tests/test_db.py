@@ -209,3 +209,22 @@ def test_init_db_adds_window_stats_to_an_old_database(tmp_path):
     (value,) = conn.execute("SELECT window_stats FROM analysis_results").fetchone()
     assert value is None
     conn.close()
+
+
+
+def test_init_db_adds_open_high_low_to_old_price_tables(tmp_path):
+    import sqlite3
+
+    from stockscout.store.db import init_db
+
+    conn = sqlite3.connect(tmp_path / "old.db")
+    conn.execute("CREATE TABLE raw_prices (ticker TEXT, date TEXT, close REAL, "
+                 "volume INTEGER, source TEXT, PRIMARY KEY (ticker, date))")
+    conn.execute("INSERT INTO raw_prices VALUES ('X', '2026-09-10', 1.0, 1, 't')")
+    conn.commit()
+
+    init_db(conn)
+
+    (o, h, l) = conn.execute("SELECT open, high, low FROM raw_prices").fetchone()
+    assert (o, h, l) == (None, None, None)
+    conn.close()

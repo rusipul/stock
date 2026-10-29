@@ -148,6 +148,9 @@ class PricePoint(BaseModel):
     date: str
     close: float
     volume: int | None = None   # 거래량 막대 (영탁센스)
+    open: float | None = None   # 캔들(일봉·주봉·월봉) 표시용
+    high: float | None = None
+    low: float | None = None
 
 
 class PriceSeries(BaseModel):

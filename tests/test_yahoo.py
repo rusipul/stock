@@ -70,3 +70,22 @@ def test_empty_frame_is_no_bars():
 
 def test_source_name_is_recorded_on_raw_prices():
     assert YahooPriceSource(history_fn=lambda *a: None).name == "yfinance"
+
+
+
+def test_open_high_low_are_kept_for_candles():
+    index = pd.DatetimeIndex([pd.Timestamp("2026-09-10", tz="America/New_York")])
+    df = pd.DataFrame({"Open": [229.0], "High": [233.0], "Low": [228.5],
+                       "Close": [231.5], "Volume": [10]}, index=index)
+
+    (bar,) = YahooPriceSource(history_fn=lambda *a: df).fetch_daily(
+        "AAPL", date(2026, 9, 10), date(2026, 9, 10))
+
+    assert (bar.open, bar.high, bar.low, bar.close) == (229.0, 233.0, 228.5, 231.5)
+
+
+def test_missing_open_high_low_stay_empty():
+    (bar,) = YahooPriceSource(history_fn=lambda *a: frame([("2026-09-10", 231.5, 1)])) \
+        .fetch_daily("AAPL", date(2026, 9, 10), date(2026, 9, 10))
+
+    assert bar.open is None and bar.high is None and bar.low is None

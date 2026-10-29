@@ -113,6 +113,11 @@ class PriceBar(BaseModel):
     date: date
     close: float         # 수정종가
     volume: int | None = None
+    # 수정 시가·고가·저가. 캔들(일봉·주봉·월봉) 표시용이고 분석은 종가만 쓴다.
+    # 옛 데이터·거래 없이 종가만 이어진 날은 None이다.
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
 
 
 # 없으면 하드필터 DATA_INSUFFICIENT로 제외된다 (설계서 §7.3)

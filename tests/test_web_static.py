@@ -720,3 +720,89 @@ def test_the_chosen_period_survives_a_reload():
 
     assert "stockscout.chartPeriod" in _function_body(js, "loadPrefs")
     assert "stockscout.chartPeriod" in _function_body(js, "savePrefs")
+
+
+
+# --- 일봉·주봉·월봉과 스크롤 ---------------------------------------------------
+
+
+def _aggregate(series, interval):
+    import json as _json
+
+    script = (
+        f"{_function_body(js_text(), 'periodKey')}\n{_function_body(js_text(), 'aggregateBars')}\n"
+        f"console.log(JSON.stringify(aggregateBars({_json.dumps(series)}, '{interval}')));"
+    )
+    return _json.loads(_run_node(script))
+
+
+DAILY = [  # 2026-09-07(월) ~ 09-15(화), 두 주에 걸친다. 09-14가 다음 주 월요일
+    {"date": "2026-09-07", "open": 10, "high": 12, "low": 9, "close": 11, "volume": 100},
+    {"date": "2026-09-09", "open": 11, "high": 15, "low": 10, "close": 14, "volume": 200},
+    {"date": "2026-09-11", "open": 14, "high": 14, "low": 8, "close": 9, "volume": 300},
+    {"date": "2026-09-14", "open": 9, "high": 10, "low": 7, "close": 8, "volume": 50},
+    {"date": "2026-09-15", "open": 8, "high": 9, "low": 6, "close": 7, "volume": None},
+]
+
+
+def test_weekly_candles_take_first_open_max_high_min_low_last_close():
+    weeks = _aggregate(DAILY, "W")
+
+    assert weeks == [
+        {"date": "2026-09-11", "open": 10, "high": 15, "low": 8, "close": 9, "volume": 600},
+        {"date": "2026-09-15", "open": 9, "high": 10, "low": 6, "close": 7, "volume": 50},
+    ]
+
+
+def test_monthly_candles_group_by_calendar_month():
+    months = _aggregate(DAILY + [{"date": "2026-10-01", "open": 7, "high": 8, "low": 7,
+                                  "close": 8, "volume": 10}], "M")
+
+    assert [m["date"] for m in months] == ["2026-09-15", "2026-10-01"]
+    assert (months[0]["open"], months[0]["high"], months[0]["low"]) == (10, 15, 6)
+
+
+def test_daily_is_unchanged():
+    assert _aggregate(DAILY, "D") == DAILY
+
+
+def test_a_week_across_the_new_year_is_one_week():
+    """2025-12-31(수)과 2026-01-02(금)는 같은 주다 - 연도로 자르면 안 된다."""
+    days = [{"date": "2025-12-31", "open": 1, "high": 2, "low": 1, "close": 2, "volume": 1},
+            {"date": "2026-01-02", "open": 2, "high": 3, "low": 2, "close": 3, "volume": 1}]
+
+    assert len(_aggregate(days, "W")) == 1
+
+
+def test_pan_moves_the_window_and_stops_at_the_edges():
+    script = (
+        f"{_function_body(js_text(), 'panRange')}\n"
+        "console.log(JSON.stringify([panRange([10, 19], 100, 5), panRange([10, 19], 100, -50),"
+        " panRange([85, 94], 100, 20)]));"
+    )
+
+    assert _run_node(script).strip() == "[[15,24],[0,9],[90,99]]"
+
+
+def test_interval_buttons_scroll_bar_and_wheel_exist():
+    js = js_text()
+    for name in ("onChartInterval", "onChartScroll", "onChartWheel"):
+        assert f"function {name}(" in js
+    assert 'id="chart-scroll"' in _function_body(js, "renderDetail")
+    assert "stockscout.chartInterval" in _function_body(js, "loadPrefs")
+    assert "stockscout.chartInterval" in _function_body(js, "savePrefs")
+
+
+def test_candles_are_drawn_as_floating_bars():
+    body = _function_body(js_text(), "drawChart")
+
+    assert "open" in body and "high" in body and "low" in body
+    assert "CANDLE_UP" in body and "CANDLE_DOWN" in body
+
+
+def test_wick_body_and_volume_bars_overlap_in_one_slot():
+    """실측: 기본값이면 Chart.js가 막대들을 한 칸에 나란히 놓아 꼬리가 몸통 옆에 붙었다."""
+    import re
+
+    body = _function_body(js_text(), "drawChart")
+    assert len(re.findall(r"grouped: false, barPercentage", body)) == 3

@@ -35,7 +35,17 @@ def init_db(conn: sqlite3.Connection) -> None:
     _add_window_stats_column_if_missing(conn)
     _add_drawdown_stats_column_if_missing(conn)
     _add_weak_axes_column_if_missing(conn)
+    _add_price_ohlc_columns_if_missing(conn)
     conn.commit()
+
+
+def _add_price_ohlc_columns_if_missing(conn: sqlite3.Connection) -> None:
+    """캔들 표시용 시가·고가·저가. 옛 봉은 NULL이고 다음 collect가 채운다
+    (주가는 매번 전 구간을 다시 받는다 - pipeline/collect._collect_prices)."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(raw_prices)")}
+    for name in ("open", "high", "low"):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE raw_prices ADD COLUMN {name} REAL")
 
 
 def _add_weak_axes_column_if_missing(conn: sqlite3.Connection) -> None:

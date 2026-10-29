@@ -508,3 +508,16 @@ def test_window_stats_are_saved_for_every_window(repo):
     assert windows["2"] == {"avg_price": 125.0, "drop_vs_avg": 100 / 125 - 1,
                             "high": 160.0, "drop_vs_high": 100 / 160 - 1}
     assert windows["5"]["avg_price"] is None      # 커버리지 미달은 None 그대로
+
+
+
+def test_price_bars_round_trip_open_high_low(repo):
+    from datetime import date
+
+    from stockscout.models import PriceBar
+
+    repo.save_price_bars([PriceBar(ticker="X", date=date(2026, 9, 10), open=1.0,
+                                   high=3.0, low=0.5, close=2.0, volume=7)], source="t")
+
+    (bar,) = repo.get_price_bars("X")
+    assert (bar.open, bar.high, bar.low, bar.close, bar.volume) == (1.0, 3.0, 0.5, 2.0, 7)

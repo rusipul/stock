@@ -299,3 +299,16 @@ def test_prices_carry_volume_for_the_volume_chart(client):
     body = client.get("/api/securities/AAPL/prices").json()
 
     assert "volume" in body["series"][0]
+
+
+
+def test_prices_carry_open_high_low(db):
+    with connect(db) as conn:
+        Repository(conn).save_price_bars([PriceBar(
+            ticker="AAPL", date=date(2026, 9, 10), open=229.0, high=233.0, low=228.0,
+            close=230.5, volume=5)], source="test")
+
+    point = TestClient(create_app(db_path=db)).get(
+        "/api/securities/AAPL/prices").json()["series"][-1]
+
+    assert (point["open"], point["high"], point["low"]) == (229.0, 233.0, 228.0)
