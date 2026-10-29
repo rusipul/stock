@@ -6,9 +6,9 @@ const state = {
   snapshot: null,
   selected: null,
   chip: "all",
-  dropThreshold: -0.40,
+  dropThreshold: null,   // 고점 대비 하락 임계치. null이면 스냅샷 기본값
+  months: null,          // 하락 기간(개월). null이면 스냅샷 기본값
   minScore: 70,
-  window: 5,          // 비교 기간(년). 평균·고점 모두 이 기간으로 잰다
   detail: null,       // 열려 있는 상세(기간을 바꾸면 다시 그린다)
   chart: null,
 };
@@ -45,12 +45,14 @@ const signClass = (v) => (v === null || v === undefined) ? "" : (v < 0 ? "neg" :
 // 슬라이더 값은 다음 방문에 복원한다. 설정 파일 기본값은 건드리지 않는다 (설계서 §11.1).
 function loadPrefs() {
   try {
-    const saved = localStorage.getItem("stockscout.dropThreshold");
+    // 키 이름이 바뀌었다(stockscout.dropThreshold는 5년 기준 -40%였다).
+    // 옛 값을 그대로 쓰면 단기 하락 기본값(-25%)이 -40%로 덮인다.
+    const saved = localStorage.getItem("stockscout.ddThreshold");
     if (saved !== null) state.dropThreshold = parseFloat(saved);
+    const months = parseInt(localStorage.getItem("stockscout.ddMonths"), 10);
+    if (months > 0) state.months = months;
     const minScore = localStorage.getItem("stockscout.minScore");
     if (minScore !== null) state.minScore = parseFloat(minScore);
-    const win = parseInt(localStorage.getItem("stockscout.window"), 10);
-    if (win >= 1 && win <= 5) state.window = win;
     const market = localStorage.getItem("stockscout.market");
     if (market === "KR" || market === "US") state.market = market;
   } catch (e) { /* 시크릿 모드 등에서 막힐 수 있다 */ }
@@ -58,9 +60,9 @@ function loadPrefs() {
 
 function savePrefs() {
   try {
-    localStorage.setItem("stockscout.dropThreshold", String(state.dropThreshold));
+    localStorage.setItem("stockscout.ddThreshold", String(state.dropThreshold));
+    localStorage.setItem("stockscout.ddMonths", String(state.months));
     localStorage.setItem("stockscout.minScore", String(state.minScore));
-    localStorage.setItem("stockscout.window", String(state.window));
     localStorage.setItem("stockscout.market", state.market);
   } catch (e) { /* 저장 실패는 기능을 막지 않는다 */ }
 }
@@ -76,7 +78,7 @@ function filterAndSort(rows, q, sort) {
     : rows.slice();
   const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
   if (sort === "drop") {
-    const drop = (r) => windowDrops(r).avg;
+    const drop = (r) => { const dd = drawdownOf(r); return dd ? dd.drop_from_high : null; };
     out.sort((a, b) => {
       const na = drop(a) === null, nb = drop(b) === null;
       if (na !== nb) return na ? 1 : -1;
@@ -119,26 +121,16 @@ async function getJSON(url) {
 // 점수가 없는 동안 ★★/★ 등급은 매기지 않는다. 가격만으로 등급을
 // 매기면 품질을 검증한 것처럼 보이는 거짓말이 된다 (설계서 §9.3).
 
-// 선택한 비교 기간(state.window)의 평균·고점 대비 하락률.
-// window_stats가 없는 행(이 기능 이전 스냅샷)은 그 기간의 컬럼이 있으면
-// 쓰고, 없으면 null이다 - 5년 값으로 대신 판정하면 다른 기간의 등급이 된다.
-function windowDrops(row) {
-  const ws = row.window_stats && row.window_stats[state.window];
-  if (ws) {
-    return { avg: ws.drop_vs_avg ?? null, high: ws.drop_vs_high ?? null };
-  }
-  if (row.window_stats && Object.keys(row.window_stats).length) {
-    return { avg: null, high: null };
-  }
-  return {
-    avg: row[`drop_vs_avg_${state.window}y`] ?? null,
-    high: state.window === 5 ? (row.drop_vs_high ?? null) : null,
-  };
+// 선택한 하락 기간(state.months)의 최근 고점 대비 하락. 서버가 1·3·6·12개월을
+// 미리 계산해 둔다(analysis/valuation.compute_drawdowns). 그 기간 값이 없으면
+// (이 기능 이전 스냅샷) null이다 - 다른 기간 값으로 대신 판정하지 않는다.
+function drawdownOf(row) {
+  return (row.drawdown && row.drawdown[state.months]) || null;
 }
 
 function hits(row) {
-  const d = windowDrops(row).avg;
-  return d !== null && d <= state.dropThreshold;
+  const dd = drawdownOf(row);
+  return dd !== null && dd.drop_from_high <= state.dropThreshold;
 }
 
 // 서버의 grade_signal(analysis/grading.py)과 같은 규칙이다. 품질이 먼저다 -
@@ -148,12 +140,11 @@ function gradeOf(row) {
   if (!state.snapshot.has_scores) return null;
   if (!row.passed_filters || row.score_total === null) return null;
   if (row.score_total < state.minScore) return null;
-  const { avg, high } = windowDrops(row);
-  const avgHit = avg !== null && avg <= state.dropThreshold;
-  const highHit = high !== null && high <= state.dropThreshold;
-  if (avgHit && highHit) return "STRONG";
-  if (avgHit || highHit) return "WATCH";
-  return null;
+  // 후보 = 최근 N개월 고점 대비 임계치 이하. 하락이 멈췄으면 별 둘, 아직
+  // 빠지는 중이면 별 하나 (analysis/grading.py와 같다).
+  const dd = drawdownOf(row);
+  if (dd === null || dd.drop_from_high > state.dropThreshold) return null;
+  return dd.stabilized ? "STRONG" : "WATCH";
 }
 
 const GRADE_BADGES = { STRONG: "★★", WATCH: "★" };
@@ -241,12 +232,12 @@ function renderHitCount() {
     const strong = passing.filter((r) => gradeOf(r) === "STRONG").length;
     const single = passing.filter((r) => gradeOf(r) === "WATCH").length;
     $("hit-count").textContent =
-      `${state.window}년 기준 -> ★★ ${strong}종목 · ★ ${single}종목 / 통과 ${passing.length}종목`;
+      `${state.months}개월 기준 -> ★★ 멈춤 ${strong} · ★ 하락중 ${single} / 통과 ${passing.length}종목`;
     return;
   }
   const n = passing.filter(hits).length;
   $("hit-count").textContent =
-    `${state.window}년 기준 -> ${n}종목 해당 / 통과 ${passing.length}종목`;
+    `${state.months}개월 기준 -> ${n}종목 해당 / 통과 ${passing.length}종목`;
 }
 
 function renderList() {
@@ -276,7 +267,8 @@ function renderList() {
     }
 
     const dp = document.createElement("span");
-    const drop = windowDrops(row).avg;
+    const dd = drawdownOf(row);
+    const drop = dd ? dd.drop_from_high : null;
     dp.className = "dp " + signClass(drop);
     dp.textContent = pct(drop);
 
@@ -345,7 +337,7 @@ async function selectTicker(ticker) {
 
 function renderDetail(d, prices) {
   state.detail = { d, prices };
-  const drops = windowDrops(d);
+  const dd = drawdownOf(d);
   const panel = $("detail-panel");
   panel.innerHTML = "";
 
@@ -378,8 +370,16 @@ function renderDetail(d, prices) {
   kpis.className = "kpis";
   kpis.innerHTML = [
     kpi(money(d.price_current), "현재가"),
-    kpi(pct(drops.avg), `${state.window}년평균 대비`, signClass(drops.avg)),
-    kpi(pct(drops.high), `${state.window}년고점 대비`, signClass(drops.high)),
+    kpi(pct(dd && dd.drop_from_high), `최근 ${state.months}개월 고점 대비`,
+        signClass(dd && dd.drop_from_high)),
+    dd && dd.market_drop !== null && dd.market_drop !== undefined
+      ? kpi(pct(dd.market_drop), `같은 기간 ${BENCHMARK_LABELS[d.benchmark] ?? "시장"}`,
+            signClass(dd.market_drop))
+      : kpi("—", "같은 기간 시장", "", true),
+    dd
+      ? kpi(dd.stabilized ? "멈춤" : "하락 중",
+            `저점 후 ${dd.days_since_low}거래일`, dd.stabilized ? "pos" : "neg")
+      : kpi("—", "하락 상태", "", true),
     d.score_total === null
       ? kpi("—", "우량주 점수", "", true)
       : kpi(d.score_total.toFixed(0), "우량주 점수"),
@@ -414,6 +414,8 @@ function renderDetail(d, prices) {
 
   drawChart(prices);
 }
+
+const BENCHMARK_LABELS = { "^KS11": "코스피", "^KQ11": "코스닥", "^GSPC": "S&P 500" };
 
 function kpi(value, label, cls = "", empty = false) {
   return `<div class="kpi${empty ? " empty" : ""}">
@@ -532,7 +534,9 @@ function drawChart(p) {
 
   // 기준선은 서버가 준 값을 그대로 쓴다. 여기서 다시 평균을 내면
   // 창 정의나 반올림이 갈려 차트와 판정 근거가 어긋난다.
+  const dd = state.detail ? drawdownOf(state.detail.d) : null;
   const refs = [
+    [`${state.months}개월 고점`, dd ? dd.high : null, "#d69e2e"],
     ["5년 고점", p.high_5y, "#e53e3e"],
     ["5년 평균", p.avg_price_5y, "#805ad5"],
     ["3년 평균", p.avg_price_3y, "#38a169"],
@@ -577,10 +581,25 @@ function drawChart(p) {
 
 // --- 초기화 ----------------------------------------------------------
 
+// 하락 기간 슬라이더의 선택지. 서버가 계산해 둔 기간(drawdown_choices)이다.
+function periodChoices() {
+  return (state.snapshot && state.snapshot.drawdown_choices) || [1, 3, 6, 12];
+}
+
+// 슬라이더 위치·표시를 state에 맞춘다. 스냅샷을 읽은 뒤(기본값이 정해진 뒤) 부른다.
+function syncSliders() {
+  const choices = periodChoices();
+  if (!choices.includes(state.months)) state.months = choices[0];
+  $("period").max = String(choices.length - 1);
+  $("period").value = String(choices.indexOf(state.months));
+  $("period-value").textContent = `${state.months}개월`;
+  const pctValue = Math.round(-state.dropThreshold * 100);
+  $("drop-threshold").value = String(pctValue);
+  $("drop-value").textContent = `-${pctValue}%`;
+}
+
 function wireControls() {
   const slider = $("drop-threshold");
-  slider.value = String(Math.round(-state.dropThreshold * 100));
-  $("drop-value").textContent = `-${slider.value}%`;
 
   slider.oninput = () => {
     state.dropThreshold = -Number(slider.value) / 100;
@@ -599,12 +618,9 @@ function wireControls() {
     renderList();
   };
 
-  const win = $("window-years");
-  win.value = String(state.window);
-  $("window-value").textContent = `${state.window}년`;
-  $("window-years").oninput = () => {
-    state.window = Number(win.value);
-    $("window-value").textContent = `${state.window}년`;
+  $("period").oninput = () => {
+    state.months = periodChoices()[Number($("period").value)];
+    $("period-value").textContent = `${state.months}개월`;
     savePrefs();
     state.rows = filterAndSort(state.rows, $("search").value.trim(), $("sort").value);
     renderHitCount();
@@ -659,6 +675,13 @@ async function loadMarket() {
     $("stock-list").innerHTML = "";
     return;
   }
+  // 저장된 값이 없으면 서버가 판정한 기준을 기본값으로 쓴다 - 그래야
+  // 처음 연 화면의 별이 서버 판정(signal_grade)과 같다.
+  if (state.months === null) state.months = state.snapshot.drawdown_months ?? 3;
+  if (state.dropThreshold === null) {
+    state.dropThreshold = state.snapshot.drawdown_threshold ?? -0.25;
+  }
+  syncSliders();
   renderSnapshotInfo();
   renderScoreBlock();
   renderChips();

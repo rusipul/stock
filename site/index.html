@@ -21,16 +21,16 @@
         <input id="search" type="search" placeholder="종목명 또는 코드 검색" autocomplete="off">
 
         <div class="slider-row">
-          <label for="drop-threshold">하락 임계치</label>
-          <output id="drop-value">-40%</output>
+          <label for="drop-threshold">고점 대비 하락</label>
+          <output id="drop-value">-25%</output>
         </div>
-        <input id="drop-threshold" type="range" min="0" max="80" step="1" value="40">
+        <input id="drop-threshold" type="range" min="0" max="80" step="1" value="25">
 
         <div class="slider-row">
-          <label for="window-years">비교 기간</label>
-          <output id="window-value">5년</output>
+          <label for="period">하락 기간 (최근)</label>
+          <output id="period-value">3개월</output>
         </div>
-        <input id="window-years" type="range" min="1" max="5" step="1" value="5">
+        <input id="period" type="range" min="0" max="3" step="1" value="1">
 
         <div id="score-slider-block" class="disabled-block">
           <div class="slider-row">
