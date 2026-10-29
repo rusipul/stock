@@ -560,3 +560,10 @@ def test_the_detail_shows_the_market_drop_and_whether_it_stopped():
 
     assert "market_drop" in body
     assert "stabilized" in body
+
+
+def test_a_weak_axis_blocks_the_grade_on_screen_too():
+    """서버의 grading.weak_axes와 같다. 미달 축이 있으면 등급이 없다."""
+    weak = dict(_row(), weak_axes=["stability"])
+
+    assert _run_grade_cases([_row(), weak]) == ["STRONG", None]

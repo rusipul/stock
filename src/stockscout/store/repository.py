@@ -286,10 +286,10 @@ class Repository:
                     score_cashflow, score_detail,
                     price_current, avg_price_1y, avg_price_3y, avg_price_5y,
                     high_5y, drop_vs_avg_1y, drop_vs_avg_3y, drop_vs_avg_5y,
-                    drop_vs_high, window_stats, drawdown_stats,
+                    drop_vs_high, window_stats, drawdown_stats, weak_axes,
                     market_cap, per, pbr, signal_grade, signal_reason
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                          ?, ?, ?, ?, ?, ?, ?, ?)
+                          ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [self._result_row(snapshot_id, r) for r in results],
             )
@@ -315,6 +315,7 @@ class Repository:
                 "benchmark": r.benchmark,
                 "windows": {str(n): d.model_dump() for n, d in s.drawdown.items()},
             }),
+            json.dumps(r.weak_axes),
             r.valuation.market_cap, r.valuation.per, r.valuation.pbr,
             r.signal_grade, r.signal_reason,
         )

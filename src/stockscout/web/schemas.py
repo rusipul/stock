@@ -77,6 +77,12 @@ class SecurityRow(BaseModel):
     # 개월 -> 최근 그 기간의 고점 대비 하락·하락 멈춤·같은 기간 시장 하락.
     drawdown: dict[int, DrawdownStat] = {}
     benchmark: str | None = None
+    # 축 점수(0~배점)와 영역 최소점 미달 축. 화면의 등급 재판정이 쓴다.
+    score_profit: float | None = None
+    score_growth: float | None = None
+    score_stability: float | None = None
+    score_cashflow: float | None = None
+    weak_axes: list[str] = []
 
     score_total: float | None
     market_cap: float | None

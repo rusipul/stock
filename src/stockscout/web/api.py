@@ -158,6 +158,7 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                     window_stats=_window_stats(r),
                     drawdown=_drawdown(r),
                     benchmark=_benchmark(r),
+                    **_axis_fields(r),
                     score_total=r["score_total"],
                     market_cap=r["market_cap"],
                     per=r["per"],
@@ -210,6 +211,7 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                 window_stats=_window_stats(row),
                 drawdown=_drawdown(row),
                 benchmark=_benchmark(row),
+                **_axis_fields(row),
                 score_total=row["score_total"],
                 market_cap=row["market_cap"],
                 per=row["per"],
@@ -299,6 +301,16 @@ def _drawdown_json(row) -> dict:
 def _drawdown(row) -> dict[int, dict]:
     """개월 -> 단기 하락. 이 컬럼 이전 스냅샷은 빈 dict다(화면은 등급을 비운다)."""
     return {int(k): v for k, v in _drawdown_json(row).get("windows", {}).items()}
+
+
+def _axis_fields(row) -> dict:
+    return {
+        "score_profit": row.get("score_profit"),
+        "score_growth": row.get("score_growth"),
+        "score_stability": row.get("score_stability"),
+        "score_cashflow": row.get("score_cashflow"),
+        "weak_axes": json.loads(row.get("weak_axes") or "[]"),
+    }
 
 
 def _benchmark(row) -> str | None:

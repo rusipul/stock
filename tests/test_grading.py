@@ -77,3 +77,60 @@ def test_too_little_price_history_for_the_period_gets_no_grade():
 
     assert g == GRADE_NONE
     assert "3개월" in reason
+
+
+# --- 영역별 최소점 --------------------------------------------------------
+
+from stockscout.analysis.grading import weak_axes  # noqa: E402
+from stockscout.models import AXIS_UNMEASURABLE, STATUS_OK, AxisScore, ScoreCard  # noqa: E402
+
+
+def card(**points):
+    """축 이름 -> 25점 만점 점수. None이면 측정 불가."""
+    axes = []
+    for axis in ("profitability", "growth", "stability", "cashflow"):
+        p = points.get(axis, 20.0)
+        if p is None:
+            axes.append(AxisScore(axis=axis, metrics=[], earned=0.0,
+                                  denominator=25.0, status=AXIS_UNMEASURABLE))
+        else:
+            axes.append(AxisScore(axis=axis, metrics=[], earned=p,
+                                  denominator=25.0, status=STATUS_OK))
+    return ScoreCard(axes=axes)
+
+
+def test_a_weak_axis_blocks_the_grade_even_with_a_high_total():
+    """실측: Oracle은 74점이지만 안정성이 6점이다. 자금 사정이 약한 우량주는 없다."""
+    c = card(profitability=25.0, growth=23.0, stability=6.0, cashflow=20.0)
+
+    g, reason = grade_signal(stats(-0.30), score_total=74.0, passed_filters=True,
+                             config=CONFIG, card=c)
+
+    assert g == GRADE_NONE
+    assert "안정성 6.0점" in reason and "10점" in reason
+
+
+def test_every_axis_at_the_minimum_passes():
+    c = card(profitability=10.0, growth=10.0, stability=10.0, cashflow=25.0)
+
+    assert grade_signal(stats(-0.30), score_total=80.0, passed_filters=True,
+                        config=CONFIG, card=c)[0] == GRADE_STRONG
+
+
+def test_an_unmeasurable_axis_blocks_the_grade():
+    """볼 수 없었던 영역은 품질을 확인하지 못한 것이다."""
+    assert weak_axes(card(cashflow=None), CONFIG.min_axis_ratio) == ["cashflow"]
+
+
+def test_weak_axes_lists_every_axis_below_the_minimum():
+    c = card(growth=4.5, stability=9.9)
+
+    assert weak_axes(c, 0.4) == ["growth", "stability"]
+
+
+def test_the_minimum_scales_with_the_axis_points():
+    """배점을 설정에서 바꿔도 비율로 잰다 (10점 만점 축이면 4점)."""
+    axis = AxisScore(axis="growth", metrics=[], earned=4.0, denominator=10.0,
+                     status=STATUS_OK, max_points=10.0)
+
+    assert weak_axes(ScoreCard(axes=[axis]), 0.4) == []

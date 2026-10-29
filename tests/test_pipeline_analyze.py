@@ -37,11 +37,16 @@ def cfg(**overrides) -> Config:
 
 
 def seed_financials(repo, ticker, years=HEALTHY_YEARS):
-    """하드필터를 전부 통과하는 정상 재무."""
+    """하드필터를 전부 통과하고 영역 최소점도 넘는 정상 재무.
+
+    매출·영업이익이 매년 10%씩 는다. 평탄하면 성장성이 4점이라 영역
+    최소점(10점)에 걸려 등급 테스트가 전부 NONE이 된다.
+    """
     repo.save_financials([
         Financials(
             ticker=ticker, fiscal_year=y, currency="KRW",
-            revenue=1_000.0, operating_income=150.0, net_income=120.0,
+            revenue=1_000.0 * 1.1 ** (y - 2019),
+            operating_income=150.0 * 1.1 ** (y - 2019), net_income=120.0,
             total_assets=2_000.0, total_liabilities=500.0, total_equity=1_000.0,
             current_assets=800.0, current_liabilities=400.0,
             interest_expense=10.0, operating_cash_flow=180.0, capex=30.0,
@@ -738,3 +743,24 @@ def test_index_bars_do_not_move_the_as_of_date(repo):
                                    close=3000.0)], source="yfinance")
 
     assert analyze_market(repo, market="KR", config=cfg()).as_of == date(2026, 9, 10)
+
+
+
+def test_analyze_records_the_weak_axes(repo):
+    """현금흐름이 전부 적자인 종목. 영역 최소점에 걸려 등급이 없다."""
+    seed_drop(repo)
+    repo.save_financials([
+        Financials(ticker="005930.KS", fiscal_year=y, currency="KRW",
+                   revenue=1_000.0 * 1.2 ** (y - 2019), operating_income=200.0 * 1.2 ** (y - 2019),
+                   net_income=160.0, total_assets=2_000.0, total_liabilities=400.0,
+                   total_equity=1_000.0, current_assets=900.0, current_liabilities=300.0,
+                   interest_expense=5.0, operating_cash_flow=-50.0, capex=30.0)
+        for y in HEALTHY_YEARS
+    ])
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+    assert "cashflow" in json.loads(row["weak_axes"])
+    assert row["signal_grade"] == "NONE"
+    assert "현금흐름" in row["signal_reason"]

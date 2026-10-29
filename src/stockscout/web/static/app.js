@@ -142,6 +142,8 @@ function gradeOf(row) {
   if (row.score_total < state.minScore) return null;
   // 후보 = 최근 N개월 고점 대비 임계치 이하. 하락이 멈췄으면 별 둘, 아직
   // 빠지는 중이면 별 하나 (analysis/grading.py와 같다).
+  // 영역 최소점 미달(서버가 analysis/grading.weak_axes로 계산해 둔다).
+  if (row.weak_axes && row.weak_axes.length) return null;
   const dd = drawdownOf(row);
   if (dd === null || dd.drop_from_high > state.dropThreshold) return null;
   return dd.stabilized ? "STRONG" : "WATCH";

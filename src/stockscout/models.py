@@ -361,6 +361,7 @@ class AnalysisResult(BaseModel):
     signal_grade: str | None = None
     signal_reason: str | None = None
     benchmark: str | None = None   # 시장 비교 지수 기호 (benchmarks.py)
+    weak_axes: list[str] = []      # 영역 최소점 미달·측정 불가 축 (grading.weak_axes)
 
     @property
     def passed_filters(self) -> bool:

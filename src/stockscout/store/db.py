@@ -34,7 +34,15 @@ def init_db(conn: sqlite3.Connection) -> None:
     _add_snapshots_market_column_if_missing(conn)
     _add_window_stats_column_if_missing(conn)
     _add_drawdown_stats_column_if_missing(conn)
+    _add_weak_axes_column_if_missing(conn)
     conn.commit()
+
+
+def _add_weak_axes_column_if_missing(conn: sqlite3.Connection) -> None:
+    """영역 최소점 컬럼. 옛 결과 행은 NULL이고 API가 빈 목록으로 본다."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(analysis_results)")}
+    if "weak_axes" not in columns:
+        conn.execute("ALTER TABLE analysis_results ADD COLUMN weak_axes TEXT")
 
 
 def _add_drawdown_stats_column_if_missing(conn: sqlite3.Connection) -> None:

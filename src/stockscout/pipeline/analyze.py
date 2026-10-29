@@ -13,7 +13,7 @@ from datetime import date, datetime, timezone
 from pydantic import BaseModel
 
 from stockscout.analysis.filters import apply_financial_filters, apply_price_filters
-from stockscout.analysis.grading import grade_signal
+from stockscout.analysis.grading import grade_signal, weak_axes
 from stockscout.analysis.scoring import score_security
 from stockscout.analysis.valuation import (
     HIGH_WINDOW_YEARS,
@@ -165,6 +165,7 @@ def analyze_market(
                 score_total=card.total if card else None,
                 passed_filters=outcome.passed,
                 config=signal,
+                card=card,
             )
         except Exception as exc:
             repo.record_error(security.ticker, "analyze",
@@ -184,6 +185,7 @@ def analyze_market(
             signal_grade=grade,
             signal_reason=reason,
             benchmark=benchmark,
+            weak_axes=weak_axes(card, signal.min_axis_ratio) if card else [],
         ))
         summary.analyzed += 1
         if outcome.passed:

@@ -201,3 +201,11 @@ def test_snapshot_says_which_period_the_server_graded(client):
     assert body["drawdown_months"] == 3
     assert body["drawdown_threshold"] == -0.25
     assert body["drawdown_choices"] == [1, 3, 6, 12]
+
+
+
+def test_rows_carry_axis_points_and_weak_axes(client):
+    (row,) = client.get("/api/securities").json()
+
+    assert "score_stability" in row
+    assert row["weak_axes"] == []

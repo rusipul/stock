@@ -107,6 +107,10 @@ class SignalConfig(BaseModel):
     """
 
     min_score: float = 70.0
+    # 영역별 최소점(배점 대비 비율). 총점이 높아도 한 영역이 이보다 낮으면
+    # 등급을 주지 않는다 - 수익성·성장성이 좋아도 자금 사정이 위험하면 안 된다.
+    # 0.4 = 25점 만점에 10점.
+    min_axis_ratio: float = Field(default=0.4, ge=0.0, le=1.0)
     drawdown_months: int = 3
     drawdown_threshold: float = -0.25
     # 계산해 두는 기간(개월). 화면의 하락 기간 슬라이더가 이 중에서 고른다.

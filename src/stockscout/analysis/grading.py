@@ -11,11 +11,25 @@ valuation.py가 점수를 모르므로, 둘을 합치는 자리를 따로 둔다
 from __future__ import annotations
 
 from stockscout.config import SignalConfig
-from stockscout.models import PriceStats
+from stockscout.models import AXIS_UNMEASURABLE, PriceStats, ScoreCard
+
+AXIS_LABELS = {"profitability": "수익성", "growth": "성장성",
+               "stability": "안정성", "cashflow": "현금흐름"}
 
 GRADE_STRONG = "STRONG"   # 화면에서 별 둘
 GRADE_WATCH = "WATCH"     # 화면에서 별 하나
 GRADE_NONE = "NONE"
+
+
+def weak_axes(card: ScoreCard, min_ratio: float) -> list[str]:
+    """배점 대비 min_ratio 미만이거나 측정 불가인 축.
+
+    측정 불가도 넣는다 - 볼 수 없었던 영역은 품질을 확인하지 못한 것이다.
+    """
+    return [
+        a.axis for a in card.axes
+        if a.status == AXIS_UNMEASURABLE or a.points < a.max_points * min_ratio
+    ]
 
 
 def grade_signal(
@@ -23,6 +37,7 @@ def grade_signal(
     score_total: float | None,
     passed_filters: bool,
     config: SignalConfig,
+    card: ScoreCard | None = None,
 ) -> tuple[str, str]:
     """(등급, 판정 근거 문장)을 낸다.
 
@@ -42,6 +57,20 @@ def grade_signal(
             f"우량주 점수 {score_total:.0f}점이 기준 "
             f"{config.min_score:.0f}점에 못 미칩니다"
         )
+    if card is not None:
+        weak = {a.axis: a for a in card.axes}
+        names = weak_axes(card, config.min_axis_ratio)
+        if names:
+            parts = [
+                f"{AXIS_LABELS.get(n, n)} 측정 불가" if weak[n].status == AXIS_UNMEASURABLE
+                else f"{AXIS_LABELS.get(n, n)} {weak[n].points:.1f}점"
+                for n in names
+            ]
+            minimum = config.min_axis_ratio * card.axes[0].max_points
+            return GRADE_NONE, (
+                f"우량주 점수 {score_total:.0f}점이지만 영역 최소점({minimum:.0f}점) 미달: "
+                + ", ".join(parts)
+            )
 
     months = config.drawdown_months
     dd = stats.drawdown.get(months)
