@@ -1058,15 +1058,51 @@ function onChartScroll() {
   applyChartRange(i0, i0 + len);
 }
 
-// 휠: 확대해 있을 때만 앞뒤로 옮긴다(보이는 폭의 10%씩). 전체를 보고 있으면
-// 페이지 스크롤을 막지 않는다.
+const ZOOM_STEP = 1.25;   // 휠 한 칸·버튼 한 번에 보이는 폭을 25% 넓히거나 줄인다
+
+// 보이는 구간 [i0, i1]을 factor배로 넓히거나(>1) 줄인다(<1). anchor(전체 기준
+// 인덱스)가 확대·축소 뒤에도 같은 비율 위치에 남는다 - 마우스가 가리키던 날짜가
+// 그 자리에 머문다. 최소 MIN_ZOOM_POINTS개, 최대 전체. 끝을 넘으면 폭은 지키고 민다.
+function zoomRange(view, total, factor, anchor) {
+  const len = view[1] - view[0] + 1;
+  const newLen = Math.min(total, Math.max(5, Math.round(len * factor)));
+  const ratio = len > 1 ? (anchor - view[0]) / (len - 1) : 0.5;
+  let i0 = Math.round(anchor - ratio * (newLen - 1));
+  i0 = Math.min(Math.max(i0, 0), total - newLen);
+  return [i0, i0 + newLen - 1];
+}
+
+// 휠: 위로 굴리면 확대, 아래로 굴리면 축소(마우스가 있는 날짜 중심).
+// Shift + 휠, 또는 트랙패드 좌우는 앞뒤로 옮긴다(보이는 폭의 10%씩).
 function onChartWheel(e) {
-  const full = state.chartFull, view = state.chartView;
-  if (!full || !view || view[1] - view[0] + 1 >= full.labels.length) return;
+  const full = state.chartFull, view = state.chartView, chart = state.chart;
+  if (!full || !view || !chart) return;
+  const horizontal = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY);
+  const total = full.labels.length;
+  if (horizontal) {
+    if (view[1] - view[0] + 1 >= total) return;   // 전체를 보면 옮길 곳이 없다
+    e.preventDefault();
+    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    const step = Math.max(1, Math.round((view[1] - view[0]) * 0.1));
+    const [i0, i1] = panRange(view, total, Math.sign(delta) * step);
+    applyChartRange(i0, i1);
+    return;
+  }
+  const zoomOut = e.deltaY > 0;
+  if (zoomOut && view[1] - view[0] + 1 >= total) return;   // 더 넓힐 수 없으면 페이지 스크롤
   e.preventDefault();
-  const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-  const step = Math.max(1, Math.round((view[1] - view[0]) * 0.1));
-  const [i0, i1] = panRange(view, full.labels.length, Math.sign(delta) * step);
+  const anchor = view[0] + chartIndexAt(e);
+  const [i0, i1] = zoomRange(view, total, zoomOut ? ZOOM_STEP : 1 / ZOOM_STEP, anchor);
+  applyChartRange(i0, i1);
+}
+
+// ＋/－ 버튼: 보이는 구간의 가운데를 중심으로 확대·축소한다.
+function onChartZoomButton(zoomIn) {
+  const full = state.chartFull, view = state.chartView;
+  if (!full || !view) return;
+  const anchor = Math.round((view[0] + view[1]) / 2);
+  const [i0, i1] = zoomRange(view, full.labels.length,
+                             zoomIn ? 1 / ZOOM_STEP : ZOOM_STEP, anchor);
   applyChartRange(i0, i1);
 }
 
@@ -1087,6 +1123,17 @@ function renderChartTools() {
   const sep = document.createElement("span");
   sep.className = "chart-sep";
   tools.appendChild(sep);
+  for (const [zoomIn, label, title] of [[true, "＋", "확대"], [false, "－", "축소"]]) {
+    const b = document.createElement("button");
+    b.className = "ptab zoom";
+    b.textContent = label;
+    b.title = title;
+    b.onclick = () => onChartZoomButton(zoomIn);
+    tools.appendChild(b);
+  }
+  const sep2 = document.createElement("span");
+  sep2.className = "chart-sep";
+  tools.appendChild(sep2);
   for (const [key, label] of CHART_PERIODS) {
     const b = document.createElement("button");
     b.className = "ptab" + (!zoomed && state.chartPeriod === key ? " on" : "");
@@ -1097,8 +1144,8 @@ function renderChartTools() {
   const hint = document.createElement("span");
   hint.className = "chart-hint";
   hint.textContent = zoomed && view
-    ? `${full.labels[view[0]]} ~ ${full.labels[view[1]]} · 휠·아래 막대로 이동 · 더블클릭하면 원래대로`
-    : "드래그하면 그 구간을 확대합니다";
+    ? `${full.labels[view[0]]} ~ ${full.labels[view[1]]} · 휠 확대·축소 · Shift+휠·아래 막대 이동 · 더블클릭 원래대로`
+    : "휠로 확대·축소, 드래그로 구간 확대";
   tools.appendChild(hint);
 }
 

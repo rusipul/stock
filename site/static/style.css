@@ -385,3 +385,5 @@ table.fin th:first-child, table.fin td:first-child { text-align: left; }
 .chart-tools .ptab.interval.on { background: #2d3748; border-color: #2d3748; }
 .chart-sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
 #chart-scroll { width: 100%; margin: 4px 0 0; accent-color: var(--accent); }
+
+.chart-tools .ptab.zoom { font-weight: 700; padding: 1px 7px; }

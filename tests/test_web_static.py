@@ -806,3 +806,47 @@ def test_wick_body_and_volume_bars_overlap_in_one_slot():
 
     body = _function_body(js_text(), "drawChart")
     assert len(re.findall(r"grouped: false, barPercentage", body)) == 3
+
+
+
+# --- 차트 축소 -------------------------------------------------------------
+
+
+def _zoom(view, total, factor, anchor):
+    script = (
+        f"{_function_body(js_text(), 'zoomRange')}\n"
+        f"console.log(JSON.stringify(zoomRange({view}, {total}, {factor}, {anchor})));"
+    )
+    return _run_node(script).strip()
+
+
+def test_zoom_out_widens_around_the_anchor():
+    """마우스가 있던 날짜(50)가 확대·축소 뒤에도 같은 비율 위치에 남는다.
+
+    50은 20개 중 10/19 위치다. 40개로 넓히면 50 - 10/19 x 39 = 29.5 -> 29.
+    """
+    assert _zoom([40, 59], 100, 2.0, 50) == "[29,68]"
+
+
+def test_zoom_in_narrows_around_the_anchor():
+    assert _zoom([40, 59], 100, 0.5, 50) == "[45,54]"
+
+
+def test_zoom_out_stops_at_the_whole_range():
+    assert _zoom([40, 59], 100, 10, 50) == "[0,99]"
+
+
+def test_zoom_out_near_an_edge_shifts_instead_of_shrinking():
+    """왼쪽 끝 근처에서 넓히면 폭은 그대로 넓히고 넘친 만큼 오른쪽으로 민다."""
+    assert _zoom([0, 9], 100, 2.0, 2) == "[0,19]"
+
+
+def test_zoom_in_keeps_at_least_five_bars():
+    assert _zoom([40, 49], 100, 0.1, 45) == "[43,47]"
+
+
+def test_wheel_zooms_and_shift_wheel_pans():
+    body = _function_body(js_text(), "onChartWheel")
+
+    assert "shiftKey" in body and "zoomRange" in body and "panRange" in body
+    assert "function onChartZoomButton(" in js_text()
