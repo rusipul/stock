@@ -199,3 +199,27 @@ def test_edgar_skips_structured_notes_and_insider_forms():
     forms = [f.form for f in src.fetch_filings("AAPL", date(2025, 10, 1), date(2026, 9, 30))]
 
     assert forms == ["8-K", "10-Q"]
+
+
+# --- 실측 오탐 (2026-10-29, 한국 72종목) ---------------------------------------
+
+
+@pytest.mark.parametrize("title", [
+    "불성실공시법인미지정              (지정유예)",                       # POSCO홀딩스
+    "매매거래정지및정지해제(중요내용공시)",                               # 카카오
+    "주권매매거래정지              (무상증자)",                           # 알테오젠
+    "상장폐지승인을위한의안상정결정",                                     # 알테오젠 코스피 이전상장
+    "기타시장안내              (상장적격성 실질심사 대상 제외 결정)",     # 파두
+    "주권매매거래정지해제              (상장적격성 실질심사 대상 제외 결정)",
+])
+def test_resolutions_and_routine_halts_are_not_risks(title):
+    assert kr(title) != CATEGORY_RISK
+
+
+@pytest.mark.parametrize("title", [
+    "불성실공시법인지정              (공시불이행)",   # 삼천당제약
+    "불성실공시법인지정예고",                         # KT - 지정 전 단계지만 위험으로 본다
+    "횡령ㆍ배임혐의발생",                             # LG에너지솔루션
+])
+def test_real_risk_titles_stay_risks(title):
+    assert kr(title) == CATEGORY_RISK

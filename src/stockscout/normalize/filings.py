@@ -22,9 +22,12 @@ CATEGORY_CATALYST = "CATALYST"    # 수주·주주환원 - 회복 계기에 가�
 KR_RISK = ("관리종목", "상장적격성", "불성실공시", "회생절차", "파산", "부도",
            "횡령", "배임", "의견거절", "부적정의견", "감사범위제한", "상장폐지",
            "매매거래정지")
-# 매매거래정지는 액면분할·병합 때도 나온다. 그 경우는 위험이 아니다.
-KR_HALT = "매매거래정지"
-KR_BENIGN_HALT = ("분할", "병합")
+# 위험 단어가 있어도 이 문구가 함께 있으면 위험이 아니다. 실측(2026-10-29,
+# 72종목) 오탐: 불성실공시법인 '미지정'(POSCO홀딩스), 중요내용 공시를 위한
+# 매매거래 정지·'해제'(카카오), '무상증자' 거래정지와 코스피 이전상장을 위한
+# 상장폐지 '의안상정'(알테오젠), 상장적격성 심사 대상 '제외'(파두).
+KR_BENIGN = ("미지정", "대상제외", "제외결정", "해제", "분할", "병합", "무상증자",
+             "중요내용공시", "의안상정")
 KR_DILUTION = ("유상증자", "전환사채", "신주인수권부사채", "교환사채")
 KR_EARNINGS = ("영업(잠정)실적", "매출액또는손익구조", "사업보고서", "분기보고서",
                "반기보고서")
@@ -68,11 +71,8 @@ def classify_filing(filing: Filing) -> str | None:
 
 def _classify_kr(title: str) -> str | None:
     t = title.replace(" ", "")
-    for word in KR_RISK:
-        if word in t:
-            if word == KR_HALT and any(b in t for b in KR_BENIGN_HALT):
-                continue
-            return CATEGORY_RISK
+    if any(word in t for word in KR_RISK) and not any(b in t for b in KR_BENIGN):
+        return CATEGORY_RISK
     if any(w in t for w in KR_CATALYST):
         return CATEGORY_CATALYST
     if any(w in t for w in KR_DILUTION):
