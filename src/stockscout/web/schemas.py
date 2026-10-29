@@ -48,6 +48,13 @@ class WindowStat(BaseModel):
     drop_vs_high: float | None = None
 
 
+class FilingRow(BaseModel):
+    filed: str
+    title: str
+    url: str
+    category: str | None   # RISK | DILUTION | EARNINGS | LEGAL | None
+
+
 class SecurityRow(BaseModel):
     """좌측 목록 한 줄. 슬라이더 재판정에 필요한 지표를 모두 담는다.
 
@@ -117,6 +124,8 @@ class SecurityDetail(SecurityRow):
     rationale: list[str]
     score_detail: str | None
     financials: list[FinancialRow]
+    filings: list[FilingRow] = []   # 최근 1년 공시, 최근 것부터
+
 
 
 class PricePoint(BaseModel):

@@ -28,6 +28,7 @@ from stockscout.analysis.valuation import (
 )
 from stockscout.benchmarks import benchmark_for
 from stockscout.config import Config
+from stockscout.normalize.filings import CATEGORY_RISK, classify_filing
 from stockscout.models import AnalysisResult, FilterOutcome, ScoreCard, Snapshot
 from stockscout.store.repository import Repository
 
@@ -160,6 +161,7 @@ def analyze_market(
             outcome = FilterOutcome(failures=list(dict.fromkeys(
                 outcome.failures + financial_outcome.failures
                 + apply_trading_value_filter(bars, hard_filters.min_trading_value)
+                + _risk_disclosure(repo, security.ticker, as_of)
             )))
 
             # 하드필터에 걸린 종목은 점수를 계산하지 않는다 (설계서 §8.1).
@@ -244,3 +246,16 @@ def _axis_points(card: ScoreCard | None, axis: str) -> float | None:
         if entry.axis == axis:
             return entry.points
     return None
+
+
+RISK_DISCLOSURE = "RISK_DISCLOSURE"
+
+
+def _risk_disclosure(repo: Repository, ticker: str, as_of: date) -> list[str]:
+    """최근 1년 안에 위험 공시(관리종목·상장적격성·공시 지연·재무제표 정정 등)가
+    있으면 제외한다. 분류 규칙은 normalize/filings.py다."""
+    since = window_start(as_of, 1)
+    for filing in repo.get_filings(ticker, since=since):
+        if filing.filed <= as_of and classify_filing(filing) == CATEGORY_RISK:
+            return [RISK_DISCLOSURE]
+    return []

@@ -157,6 +157,21 @@ def collect_market(
                                   f"{type(exc).__name__}: {exc}")
                 ticker_failed = True
 
+        # 최근 1년 공시. 실패해도 종목 결과에 영향이 없다 - 화면의 공시 목록과
+        # 위험 공시 필터만 비고, 원인은 collect_errors에 남는다.
+        if not aborted and hasattr(fundamentals, "fetch_filings"):
+            try:
+                filings = fundamentals.fetch_filings(
+                    ticker, _one_year_before(price_end), price_end)
+                if filings:
+                    repo.save_filings(filings)
+            except ABORTING_ERRORS as exc:
+                repo.record_error(ticker, "filings", str(exc))
+                summary.abort_reason = str(exc)
+                aborted = True
+            except Exception as exc:
+                repo.record_error(ticker, "filings", f"{type(exc).__name__}: {exc}")
+
         # 재무제표 수집과 별개의 try. DART(fundamentals)가 실패해도
         # pykrx(prices)는 독립 소스이므로 계속 시도해야 한다 — 그렇지 않으면
         # "corp_code를 찾을 수 없습니다" 같은 정상적으로 발생하는 DART 실패가
@@ -293,3 +308,10 @@ def _collect_prices(
     if bars:
         repo.save_price_bars(bars, source=source.name)
     return len(bars)
+
+
+def _one_year_before(d: date) -> date:
+    try:
+        return d.replace(year=d.year - 1)
+    except ValueError:   # 2월 29일
+        return d.replace(year=d.year - 1, day=28)

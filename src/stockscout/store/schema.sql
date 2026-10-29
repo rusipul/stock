@@ -57,6 +57,17 @@ CREATE TABLE IF NOT EXISTS financials (
   PRIMARY KEY (ticker, fiscal_year)
 );
 
+-- 최근 공시 (원문 그대로). 분류는 normalize/filings.py가 읽을 때 한다.
+CREATE TABLE IF NOT EXISTS filings (
+  ticker TEXT NOT NULL,
+  filed  TEXT NOT NULL,
+  title  TEXT NOT NULL,
+  url    TEXT NOT NULL,
+  form   TEXT,
+  items  TEXT,
+  PRIMARY KEY (ticker, url)
+);
+
 CREATE TABLE IF NOT EXISTS snapshots (
   snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_at      TEXT NOT NULL,

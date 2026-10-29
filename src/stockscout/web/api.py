@@ -18,9 +18,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from stockscout.models import AXIS_UNMEASURABLE, Financials
-from stockscout.store.db import DEFAULT_DB_PATH, connect
+from stockscout.normalize.filings import classify_filing
+from stockscout.store.db import DEFAULT_DB_PATH, connect, init_db
 from stockscout.store.repository import Repository
 from stockscout.web.schemas import (
+    FilingRow,
     FinancialRow,
     PricePoint,
     PriceSeries,
@@ -30,6 +32,7 @@ from stockscout.web.schemas import (
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
+FILINGS_SHOWN = 15
 
 Market = Literal["KR", "US"]
 
@@ -82,6 +85,11 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
     """앱을 만든다. db_path를 주입받아 테스트가 임시 DB를 쓸 수 있게 한다."""
     app = FastAPI(title="stockscout")
     db_path = Path(db_path)
+    # 스키마를 한 번 맞춘다. 새 기능이 테이블·컬럼을 더한 뒤 analyze를 아직
+    # 돌리지 않은 DB로 serve해도 죽지 않게 한다. CREATE IF NOT EXISTS와
+    # ADD COLUMN뿐이라 데이터는 건드리지 않는다.
+    with connect(db_path) as conn:
+        init_db(conn)
 
     def read(fn):
         """요청마다 연결을 열고 닫는다.
@@ -212,6 +220,11 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> FastAPI:
                 drawdown=_drawdown(row),
                 benchmark=_benchmark(row),
                 **_axis_fields(row),
+                filings=[
+                    FilingRow(filed=f.filed.isoformat(), title=f.title, url=f.url,
+                              category=classify_filing(f))
+                    for f in repo.get_filings(ticker, limit=FILINGS_SHOWN)
+                ],
                 score_total=row["score_total"],
                 market_cap=row["market_cap"],
                 per=row["per"],

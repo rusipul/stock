@@ -209,3 +209,20 @@ def test_rows_carry_axis_points_and_weak_axes(client):
 
     assert "score_stability" in row
     assert row["weak_axes"] == []
+
+
+def test_detail_lists_recent_filings_with_their_category(db):
+    from stockscout.models import Filing
+
+    with connect(db) as conn:
+        Repository(conn).save_filings([
+            Filing(ticker="AAPL", filed=date(2026, 9, 1), title="8-K", form="8-K",
+                   items="2.02", url="https://sec/1"),
+            Filing(ticker="AAPL", filed=date(2026, 8, 1), title="NT 10-K", form="NT 10-K",
+                   url="https://sec/2"),
+        ])
+
+    body = TestClient(create_app(db_path=db)).get("/api/securities/AAPL").json()
+
+    assert [(f["filed"], f["category"]) for f in body["filings"]] == [
+        ("2026-09-01", "EARNINGS"), ("2026-08-01", "RISK")]

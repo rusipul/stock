@@ -574,3 +574,9 @@ def test_the_detail_shows_valuation_including_fcf_yield():
     body = _function_body(js_text(), "renderDetail")
 
     assert "fcf_yield" in body and "per" in body and "pbr" in body
+
+
+def test_the_detail_lists_recent_filings():
+    body = _function_body(js_text(), "renderDetail")
+
+    assert "filings" in body and "최근 공시" in body

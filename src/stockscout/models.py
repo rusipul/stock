@@ -27,6 +27,21 @@ class Security(BaseModel):
     in_universe: bool = True
 
 
+class Filing(BaseModel):
+    """공시 한 건. 원문 그대로 담고 분류는 normalize/filings.py가 읽을 때 한다.
+
+    form·items는 SEC 공시에만 있다(양식 '8-K', 항목 '2.02,9.01').
+    한국은 제목(report_nm)이 곧 성격이라 title만 쓴다.
+    """
+
+    ticker: str
+    filed: date
+    title: str
+    url: str
+    form: str | None = None
+    items: str | None = None
+
+
 class RawStatement(BaseModel):
     """소스 응답을 가공 없이 담는다. 해석은 normalize 계층의 책임이다."""
 

@@ -5,13 +5,15 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import io
 import xml.etree.ElementTree as ET
 import zipfile
 
 import httpx
 
-from stockscout.models import RawStatement
+from stockscout.models import Filing, RawStatement
 from stockscout.sources.base import FatalSourceError, PermanentSourceError, SourceError
 from stockscout.sources.ratelimit import DailyQuota, TokenBucket, retry_on_transient
 
@@ -212,6 +214,34 @@ class DartSource:
                 return {**payload, "fs_div": fs_div}
         return None
 
+    # --- 공시검색 ------------------------------------------------------
+
+    @retry_on_transient(attempts=3)
+    def fetch_filings(self, ticker: str, since: date, until: date) -> list[Filing]:
+        """기간 안의 공시 목록(최근 100건). 없으면 빈 목록."""
+        self.ensure_corp_codes()
+        corp_code = self.corp_codes.get(self._stock_code(ticker))
+        if corp_code is None:
+            raise PermanentSourceError(f"{ticker}의 corp_code를 찾을 수 없습니다")
+        data = self._call("list.json", {
+            "corp_code": corp_code,
+            "bgn_de": since.strftime("%Y%m%d"),
+            "end_de": until.strftime("%Y%m%d"),
+            "page_count": "100",
+        })
+        if data is None:
+            return []
+        return [
+            Filing(
+                ticker=ticker,
+                filed=date(int(r["rcept_dt"][:4]), int(r["rcept_dt"][4:6]),
+                           int(r["rcept_dt"][6:8])),
+                title=(r.get("report_nm") or "").strip(),
+                url=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={r['rcept_no']}",
+            )
+            for r in data.get("list", [])
+        ]
+
     @retry_on_transient(attempts=3)
     def _fetch_shares_one_year(self, corp_code: str, year: int) -> dict | None:
         """한 회계연도의 주식의 총수 현황. 데이터가 없으면 None."""
@@ -254,17 +284,21 @@ class DartSource:
         - 900(정의되지 않은 오류)·그 외 미지정 코드: 원인을 알 수 없으므로
           배치를 멈출 근거가 없다. 이 종목만 SourceError로 실패시킨다.
         """
+        return self._call(endpoint, {
+            "corp_code": corp_code,
+            "bsns_year": str(year),
+            "reprt_code": REPORT_CODE_ANNUAL,
+            **extra,
+        })
+
+    def _call(self, endpoint: str, params: dict[str, str]) -> dict | None:
+        """요청 하나와 status 해석. 공시검색(list.json)처럼 사업연도가 없는
+        엔드포인트도 같은 status 규칙을 쓴다 (_fetch_json의 docstring 참고)."""
         self.bucket.wait()
         self.quota.consume()
         resp = self._client.get(
             f"{BASE_URL}/{endpoint}",
-            params={
-                "crtfc_key": self.api_key,
-                "corp_code": corp_code,
-                "bsns_year": str(year),
-                "reprt_code": REPORT_CODE_ANNUAL,
-                **extra,
-            },
+            params={"crtfc_key": self.api_key, **params},
         )
         resp.raise_for_status()
         data = resp.json()

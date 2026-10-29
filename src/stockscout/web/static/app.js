@@ -388,6 +388,22 @@ function renderDetail(d, prices) {
   ].join("");
   panel.appendChild(kpis);
 
+  // 최근 공시. 하락 원인과 회복 계기는 사람이 판단한다 - 그 재료를 보인다.
+  if (d.filings && d.filings.length) {
+    panel.appendChild(sectionTitle("최근 공시"));
+    const ul = document.createElement("ul");
+    ul.className = "filings";
+    for (const f of d.filings) {
+      const li = document.createElement("li");
+      const tag = FILING_LABELS[f.category];
+      li.innerHTML = `<span class="fdate">${escapeHtml(f.filed)}</span>`
+        + (tag ? `<span class="ftag ${f.category.toLowerCase()}">${tag}</span>` : "")
+        + `<a href="${escapeHtml(f.url)}" target="_blank" rel="noopener">${escapeHtml(f.title)}</a>`;
+      ul.appendChild(li);
+    }
+    panel.appendChild(ul);
+  }
+
   // 가치평가. 많이 떨어졌어도 여전히 비쌀 수 있다. 점수에는 넣지 않는다(§8.2).
   const val = document.createElement("p");
   val.className = "valuation";
@@ -430,6 +446,8 @@ function renderDetail(d, prices) {
 
   drawChart(prices);
 }
+
+const FILING_LABELS = { RISK: "위험", DILUTION: "자금조달", EARNINGS: "실적", LEGAL: "소송" };
 
 const BENCHMARK_LABELS = { "^KS11": "코스피", "^KQ11": "코스닥", "^GSPC": "S&P 500" };
 

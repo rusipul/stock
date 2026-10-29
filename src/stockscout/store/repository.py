@@ -8,6 +8,7 @@ import sqlite3
 from datetime import date, datetime, timezone
 
 from stockscout.models import (
+    Filing,
     AnalysisResult,
     Financials,
     PriceBar,
@@ -443,6 +444,35 @@ class Repository:
         self.conn.commit()
 
     # --- 오류 기록 ---------------------------------------------------
+
+    def save_filings(self, filings: list[Filing]) -> None:
+        self.conn.executemany(
+            "INSERT INTO filings (ticker, filed, title, url, form, items) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(ticker, url) DO UPDATE SET filed=excluded.filed, "
+            "title=excluded.title, form=excluded.form, items=excluded.items",
+            [(f.ticker, f.filed.isoformat(), f.title, f.url, f.form, f.items)
+             for f in filings],
+        )
+        self.conn.commit()
+
+    def get_filings(
+        self, ticker: str, since: date | None = None, limit: int | None = None
+    ) -> list[Filing]:
+        """최근 것부터."""
+        sql = "SELECT * FROM filings WHERE ticker = ?"
+        params: list = [ticker]
+        if since is not None:
+            sql += " AND filed >= ?"
+            params.append(since.isoformat())
+        sql += " ORDER BY filed DESC, url"
+        if limit is not None:
+            sql += f" LIMIT {int(limit)}"
+        return [
+            Filing(ticker=r["ticker"], filed=date.fromisoformat(r["filed"]),
+                   title=r["title"], url=r["url"], form=r["form"], items=r["items"])
+            for r in self.conn.execute(sql, params).fetchall()
+        ]
 
     def record_error(self, ticker: str, source: str, message: str) -> None:
         self.conn.execute(

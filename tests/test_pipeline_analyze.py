@@ -764,3 +764,29 @@ def test_analyze_records_the_weak_axes(repo):
     assert "cashflow" in json.loads(row["weak_axes"])
     assert row["signal_grade"] == "NONE"
     assert "현금흐름" in row["signal_reason"]
+
+
+def test_a_risk_filing_in_the_last_year_excludes_the_security(repo):
+    from stockscout.models import Filing
+
+    seed_drop(repo)
+    repo.save_filings([Filing(ticker="005930.KS", filed=date(2026, 5, 1),
+                              title="불성실공시법인지정", url="u1")])
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+    assert "RISK_DISCLOSURE" in json.loads(row["filter_failures"])
+
+
+def test_an_old_risk_filing_is_ignored(repo):
+    from stockscout.models import Filing
+
+    seed_drop(repo)
+    repo.save_filings([Filing(ticker="005930.KS", filed=date(2025, 5, 1),
+                              title="불성실공시법인지정", url="u1")])
+
+    summary = analyze_market(repo, market="KR", config=cfg())
+
+    (row,) = repo.get_analysis_results(summary.snapshot_id)
+    assert "RISK_DISCLOSURE" not in json.loads(row["filter_failures"])

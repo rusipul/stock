@@ -12,7 +12,7 @@ from datetime import date
 
 import httpx
 
-from stockscout.models import RawStatement
+from stockscout.models import Filing, RawStatement
 from stockscout.sources.base import FatalSourceError, PermanentSourceError
 from stockscout.sources.ratelimit import TokenBucket
 
@@ -123,6 +123,7 @@ def annual_facts(companyfacts: dict) -> dict[int, dict]:
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
+SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 
 # 재시도할 상태. 429(속도 제한)와 5xx는 정의상 일시적이다.
 RETRY_STATUSES = {429, 500, 502, 503, 504}
@@ -170,7 +171,7 @@ class EdgarSource:
         # 아직 10-K가 없는 회사를 가리킬 때 쓴다 (실측: XOM, 설계서 §18.4).
         self.cik_overrides = {k.upper(): v for k, v in (cik_overrides or {}).items()}
 
-    def fetch_annual(self, ticker: str, years: list[int]) -> list[RawStatement]:
+    def _cik(self, ticker: str) -> int:
         cik = self.cik_overrides.get(ticker.upper())
         if cik is None:
             if not self.ciks:
@@ -178,6 +179,32 @@ class EdgarSource:
             cik = self.ciks.get(ticker.upper())
         if cik is None:
             raise PermanentSourceError(f"SEC 티커 목록에 없습니다: {ticker}")
+        return cik
+
+    def fetch_filings(self, ticker: str, since: date, until: date) -> list[Filing]:
+        """기간 안의 공시 목록 (submissions API의 최근 공시)."""
+        cik = self._cik(ticker)
+        recent = self._get_json(SUBMISSIONS_URL.format(cik=cik)).get(
+            "filings", {}).get("recent", {})
+        out: list[Filing] = []
+        for i, form in enumerate(recent.get("form", [])):
+            filed = date.fromisoformat(recent["filingDate"][i])
+            if not since <= filed <= until:
+                continue
+            accession = recent["accessionNumber"][i].replace("-", "")
+            doc = recent.get("primaryDocument", [""] * (i + 1))[i]
+            desc = (recent.get("primaryDocDescription", [""] * (i + 1))[i] or "").strip()
+            items = (recent.get("items", [""] * (i + 1))[i] or "").strip()
+            out.append(Filing(
+                ticker=ticker, filed=filed, form=form, items=items,
+                title=" ".join(x for x in (form, desc if desc != form else "",
+                                           f"(항목 {items})" if items else "") if x),
+                url=f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{doc}",
+            ))
+        return out
+
+    def fetch_annual(self, ticker: str, years: list[int]) -> list[RawStatement]:
+        cik = self._cik(ticker)
 
         by_year = annual_facts(self._get_json(FACTS_URL.format(cik=cik)))
         if not by_year:

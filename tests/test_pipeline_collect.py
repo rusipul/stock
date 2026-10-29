@@ -823,3 +823,41 @@ def test_a_failing_index_does_not_fail_the_securities(repo):
 
     assert summary.succeeded == 1
     assert any("^KS11" in e["ticker"] for e in repo.recent_errors(limit=5))
+
+
+# --- 최근 공시 ---------------------------------------------------------------
+
+
+def test_collect_stores_recent_filings(repo):
+    from stockscout.models import Filing
+
+    class WithFilings(FakeFundamentals):
+        def fetch_filings(self, ticker, since, until):
+            self.window = (since, until)
+            return [Filing(ticker=ticker, filed=date(2026, 9, 1), title="유상증자결정",
+                           url="https://dart/1")]
+
+    sync_universe(repo, FakeUniverse([sec()]), market="KR")
+    source = WithFilings()
+
+    collect_market(repo, market="KR", fundamentals=source, prices=FakePrices(),
+                   years=[2025], price_start=date(2021, 9, 10),
+                   price_end=date(2026, 9, 10))
+
+    (f,) = repo.get_filings("005930.KS")
+    assert f.title == "유상증자결정"
+    assert source.window == (date(2025, 9, 10), date(2026, 9, 10))   # 최근 1년
+
+
+def test_a_filing_failure_does_not_fail_the_security(repo):
+    class Broken(FakeFundamentals):
+        def fetch_filings(self, ticker, since, until):
+            raise ConnectionError("down")
+
+    sync_universe(repo, FakeUniverse([sec()]), market="KR")
+
+    summary = collect_market(repo, market="KR", fundamentals=Broken(),
+                             prices=FakePrices(), years=[2025],
+                             price_start=date(2021, 9, 10), price_end=date(2026, 9, 10))
+
+    assert summary.succeeded == 1
